@@ -15,8 +15,8 @@ VPN_POOL_START="10.10.10.10"
 VPN_POOL_END="10.10.10.200"
 
 # SOCKS5 配置
-SOCKS_USER="vpnqiaozhi"
-SOCKS_PASS="vpnqiaozhi"
+SOCKS_USER="NameQC"
+SOCKS_PASS="NameQC"
 SOCKS_PORT=1080
 
 ########################
@@ -209,8 +209,13 @@ systemctl restart strongswan-starter
 systemctl restart xl2tpd
 
 echo "===================================================="
-echo " 安装完成：L2TP/IPsec + SOCKS5（Ubuntu 24 终极版）"
-echo
+echo "#           Telegram联系：@NameQC                   #"
+echo "#    全球服务器 免实名服务器 高防服务器 站群服务器     #"
+echo "#         Telegram双向机器人：@NameQCBot            #"
+echo "===================================================="
+echo "===================================================="
+echo " 安装完成：L2TP/IPsec + SOCKS5（Ubuntu 24 终极版）   "
+echo"===================================================="
 echo "【L2TP/IPsec】"
 echo "  服务器：你的公网 IP"
 echo "  账户：  $VPN_USER"
