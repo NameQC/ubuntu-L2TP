@@ -487,14 +487,13 @@ EOF2
     netfilter-persistent save
 
     ########################
-    # Dante SOCKS5 配置（使用 socksmethod 替代 method）
+    # Dante SOCKS5 配置
     ########################
     id socks >/dev/null 2>&1 || useradd -r -s /usr/sbin/nologin socks
 
     id "$SOCKS_USER" >/dev/null 2>&1 || useradd -M -s /usr/sbin/nologin "$SOCKS_USER"
     echo "$SOCKS_USER:$SOCKS_PASS" | chpasswd
 
-    # 使用 /tmp 作为日志目录（避免只读文件系统问题）
     cat > /etc/danted.conf <<EOF2
 logoutput: /tmp/danted.log
 
@@ -516,7 +515,6 @@ pass {
 }
 EOF2
 
-    # 创建日志文件
     touch /tmp/danted.log
     chmod 644 /tmp/danted.log
 
