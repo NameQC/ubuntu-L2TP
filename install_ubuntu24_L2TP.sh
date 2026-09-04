@@ -57,6 +57,10 @@ install_l2tp() {
     apt update -y
     apt install -y strongswan xl2tpd ppp iptables iptables-persistent
 
+    # 创建必要的目录（确保安装后目录存在）
+    mkdir -p /etc/xl2tpd
+    mkdir -p /etc/ppp
+
     cat > /etc/sysctl.d/99-l2tp-ipsec.conf <<EOF
 net.ipv4.ip_forward=1
 net.ipv4.conf.all.send_redirects=0
@@ -132,10 +136,10 @@ EOF
     iptables -A INPUT -p udp --dport 1701 -j ACCEPT
     netfilter-persistent save
 
-    systemctl enable strongswan-starter
-    systemctl enable xl2tpd
-    systemctl restart strongswan-starter
-    systemctl restart xl2tpd
+    systemctl enable strongswan-starter 2>/dev/null || true
+    systemctl enable xl2tpd 2>/dev/null || true
+    systemctl restart strongswan-starter 2>/dev/null || true
+    systemctl restart xl2tpd 2>/dev/null || true
 
     if [ -f /usr/local/bin/l2tp-mgr ]; then
         rm -f /usr/local/bin/l2tp-mgr
@@ -215,13 +219,13 @@ EOF
             grep -v "^#" /etc/ppp/chap-secrets | awk '{print "    用户名: " $1 ", 密码: " $3}'
             echo ""
             echo "【服务状态】"
-            systemctl status strongswan-starter --no-pager | grep "Active:"
-            systemctl status xl2tpd --no-pager | grep "Active:"
+            systemctl status strongswan-starter --no-pager 2>/dev/null | grep "Active:" || echo "  服务未运行"
+            systemctl status xl2tpd --no-pager 2>/dev/null | grep "Active:" || echo "  服务未运行"
             ;;
         6)
             echo "正在重启VPN服务..."
-            systemctl restart strongswan-starter
-            systemctl restart xl2tpd
+            systemctl restart strongswan-starter 2>/dev/null || true
+            systemctl restart xl2tpd 2>/dev/null || true
             echo "✅ 服务已重启！"
             ;;
         0)
