@@ -527,17 +527,13 @@ EOF2
     echo "  ss -tnlp  | grep $SOCKS_PORT"
     echo "---------------------------------------------------"
     echo "【L2TP/IPsec】"
-    echo "  服务器：$SERVER_IP"
-    echo "  账户：  $VPN_USER"
-    echo "  密码：  $VPN_PASS"
-    echo "  PSK：   $VPN_PSK"
-    echo
-    echo "iPhone / iPad / macOS 设置："
-    echo "  类型：      L2TP"
     echo "  服务器：    $SERVER_IP"
     echo "  账户：      $VPN_USER"
     echo "  密码：      $VPN_PASS"
     echo "  密钥(PSK)： $VPN_PSK"
+    echo
+    echo "iPhone / iPad / macOS 用户设置："
+    echo "  类型：      L2TP"
     echo "  发送所有流量：开启"
     echo
     echo "【SOCKS5】"
