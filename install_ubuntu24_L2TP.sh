@@ -217,7 +217,7 @@ show_socks5_menu() {
                 echo "正在卸载SOCKS5服务..."
                 systemctl stop danted 2>/dev/null
                 systemctl disable danted 2>/dev/null
-                apt remove -y danted 2>/dev/null
+                apt remove -y dante-server 2>/dev/null
                 rm -f /etc/danted.conf
                 rm -f /root/.socks5_credentials
                 echo "✅ SOCKS5服务已卸载！"
@@ -288,7 +288,7 @@ show_main_menu() {
                     echo "正在卸载..."
                     systemctl stop strongswan-starter xl2tpd danted 2>/dev/null
                     systemctl disable strongswan-starter xl2tpd danted 2>/dev/null
-                    apt remove -y strongswan xl2tpd danted 2>/dev/null
+                    apt remove -y strongswan xl2tpd dante-server 2>/dev/null
                     rm -rf /etc/ipsec.conf /etc/ipsec.secrets /etc/xl2tpd /etc/ppp/chap-secrets /etc/danted.conf
                     rm -f /usr/local/bin/vpn
                     rm -f /root/.socks5_credentials
@@ -380,7 +380,7 @@ install_vpn() {
     ########################
     export DEBIAN_FRONTEND=noninteractive
     apt update -y
-    apt install -y strongswan xl2tpd ppp iptables iptables-persistent danted
+    apt install -y strongswan xl2tpd ppp iptables iptables-persistent dante-server
 
     ########################
     # IP 转发 & 内核参数
