@@ -1,18 +1,11 @@
 #!/usr/bin/env bash
 set -e
 
-########################
-# 颜色定义
-########################
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
 NC='\033[0m'
 
-########################
-# 显示Banner
-########################
 show_banner() {
     clear
     echo "===================================================="
@@ -24,9 +17,6 @@ show_banner() {
     echo "===================================================="
 }
 
-########################
-# 安装 L2TP/IPSec
-########################
 install_l2tp() {
     echo -e "${GREEN}>>> 开始安装 L2TP/IPSec VPN${NC}"
 
@@ -48,18 +38,11 @@ install_l2tp() {
         echo "使用默认值: 用户名=$VPN_USER, 密码=$VPN_PASS, PSK=$VPN_PSK"
     fi
 
-    if [ -f /etc/ppp/chap-secrets ]; then
-        echo -e "${YELLOW}检测到L2TP已安装，跳过安装步骤${NC}"
-        return 0
-    fi
-
     export DEBIAN_FRONTEND=noninteractive
     apt update -y
     apt install -y strongswan xl2tpd ppp iptables iptables-persistent
 
-    # 创建必要的目录（确保安装后目录存在）
-    mkdir -p /etc/xl2tpd
-    mkdir -p /etc/ppp
+    mkdir -p /etc/xl2tpd /etc/ppp
 
     cat > /etc/sysctl.d/99-l2tp-ipsec.conf <<EOF
 net.ipv4.ip_forward=1
@@ -141,10 +124,7 @@ EOF
     systemctl restart strongswan-starter 2>/dev/null || true
     systemctl restart xl2tpd 2>/dev/null || true
 
-    if [ -f /usr/local/bin/l2tp-mgr ]; then
-        rm -f /usr/local/bin/l2tp-mgr
-    fi
-    cat > /usr/local/bin/l2tp-mgr <<'EOF2'
+    cat > /usr/local/bin/l2tp-mgr <<'EOF'
 #!/usr/bin/env bash
 show_l2tp_menu() {
     echo "===================================================="
@@ -178,7 +158,7 @@ show_l2tp_menu() {
             read -p "请输入新密码: " NEW_PASS
             sed -i "/^$MOD_USER /s/ [^ ]* / $NEW_PASS /" /etc/ppp/chap-secrets
             echo "✅ 用户 $MOD_USER 的密码已更新！"
-            systemctl restart xl2tpd
+            systemctl restart xl2tpd 2>/dev/null || true
             ;;
         2)
             read -p "请输入新用户名: " NEW_USER
@@ -190,7 +170,7 @@ show_l2tp_menu() {
             echo "$NEW_USER l2tpd $NEW_PASS *" >> /etc/ppp/chap-secrets
             chmod 600 /etc/ppp/chap-secrets
             echo "✅ 用户 $NEW_USER 已添加！"
-            systemctl restart xl2tpd
+            systemctl restart xl2tpd 2>/dev/null || true
             ;;
         3)
             read -p "请输入要删除的用户名: " DEL_USER
@@ -200,7 +180,7 @@ show_l2tp_menu() {
             fi
             sed -i "/^$DEL_USER /d" /etc/ppp/chap-secrets
             echo "✅ 用户 $DEL_USER 已删除！"
-            systemctl restart xl2tpd
+            systemctl restart xl2tpd 2>/dev/null || true
             ;;
         4)
             read -p "请输入新的预共享密钥(PSK): " NEW_PSK
@@ -208,7 +188,7 @@ show_l2tp_menu() {
 : PSK "$NEW_PSK"
 EOF
             echo "✅ 预共享密钥已更新！"
-            systemctl restart strongswan-starter
+            systemctl restart strongswan-starter 2>/dev/null || true
             ;;
         5)
             echo ""
@@ -235,7 +215,6 @@ EOF
             echo "无效选项！"
             ;;
     esac
-
     echo ""
     read -p "按回车键继续..."
 }
@@ -245,11 +224,10 @@ if [ -f /etc/ppp/chap-secrets ]; then
 else
     echo "L2TP/IPSec VPN 未安装，请先运行安装脚本。"
 fi
-EOF2
+EOF
     chmod +x /usr/local/bin/l2tp-mgr
 
     SERVER_IP=$(curl -s ifconfig.me || echo "未知")
-
     echo -e "${GREEN}====================================================${NC}"
     echo -e "${GREEN}           L2TP/IPSec VPN 安装完成！${NC}"
     echo "===================================================="
@@ -272,9 +250,6 @@ EOF2
     echo "===================================================="
 }
 
-########################
-# 安装 SOCKS5
-########################
 install_socks5() {
     echo -e "${GREEN}>>> 开始安装 SOCKS5 代理${NC}"
 
@@ -291,11 +266,6 @@ install_socks5() {
         SOCKS_USER="NameQC"
         SOCKS_PASS="NameQC"
         echo "使用默认值: 用户名=$SOCKS_USER, 密码=$SOCKS_PASS"
-    fi
-
-    if systemctl status danted &>/dev/null; then
-        echo -e "${YELLOW}检测到SOCKS5已安装，跳过安装步骤${NC}"
-        return 0
     fi
 
     export DEBIAN_FRONTEND=noninteractive
@@ -335,10 +305,7 @@ EOF
     systemctl enable danted
     systemctl restart danted
 
-    if [ -f /usr/local/bin/socks5-mgr ]; then
-        rm -f /usr/local/bin/socks5-mgr
-    fi
-    cat > /usr/local/bin/socks5-mgr <<'EOF2'
+    cat > /usr/local/bin/socks5-mgr <<'EOF'
 #!/usr/bin/env bash
 show_socks5_menu() {
     echo "===================================================="
@@ -416,7 +383,6 @@ show_socks5_menu() {
             echo "无效选项！"
             ;;
     esac
-
     echo ""
     read -p "按回车键继续..."
 }
@@ -426,11 +392,10 @@ if systemctl status danted &>/dev/null; then
 else
     echo "SOCKS5 未安装，请先运行安装脚本。"
 fi
-EOF2
+EOF
     chmod +x /usr/local/bin/socks5-mgr
 
     SERVER_IP=$(curl -s ifconfig.me || echo "未知")
-
     echo -e "${GREEN}====================================================${NC}"
     echo -e "${GREEN}           SOCKS5 代理安装完成！${NC}"
     echo "===================================================="
@@ -445,9 +410,6 @@ EOF2
     echo "===================================================="
 }
 
-########################
-# 安装 VLESS (默认端口: 8443)
-########################
 install_vless() {
     echo -e "${GREEN}>>> 开始安装 VLESS (Xray) 节点${NC}"
 
@@ -457,24 +419,15 @@ install_vless() {
 
     DEFAULT_PORT="8443"
     DEFAULT_UUID=$(cat /proc/sys/kernel/random/uuid)
-    DEFAULT_PATH="/vless"
 
     if [[ "$CUSTOM_CHOICE" == "y" || "$CUSTOM_CHOICE" == "Y" ]]; then
         echo "请输入端口 (默认: $DEFAULT_PORT):"
         read -r PORT
         echo "请输入UUID (直接回车生成随机UUID):"
         read -r UUID
-        echo "请输入路径 (默认: $DEFAULT_PATH):"
-        read -r PATH
     else
         PORT="$DEFAULT_PORT"
         UUID="$DEFAULT_UUID"
-        PATH="$DEFAULT_PATH"
-    fi
-
-    if systemctl status xray &>/dev/null; then
-        echo -e "${YELLOW}检测到VLESS已安装，跳过安装步骤${NC}"
-        return 0
     fi
 
     bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
@@ -522,10 +475,7 @@ EOF
     systemctl restart xray
     systemctl enable xray
 
-    if [ -f /usr/local/bin/vless-mgr ]; then
-        rm -f /usr/local/bin/vless-mgr
-    fi
-    cat > /usr/local/bin/vless-mgr <<'EOF2'
+    cat > /usr/local/bin/vless-mgr <<'EOF'
 #!/usr/bin/env bash
 show_vless_menu() {
     echo "===================================================="
@@ -588,7 +538,6 @@ show_vless_menu() {
             echo "无效选项！"
             ;;
     esac
-
     echo ""
     read -p "按回车键继续..."
 }
@@ -598,11 +547,10 @@ if systemctl status xray &>/dev/null; then
 else
     echo "VLESS (Xray) 未安装，请先运行安装脚本。"
 fi
-EOF2
+EOF
     chmod +x /usr/local/bin/vless-mgr
 
     SERVER_IP=$(curl -s ifconfig.me || echo "未知")
-
     echo -e "${GREEN}====================================================${NC}"
     echo -e "${GREEN}           VLESS 节点安装完成！${NC}"
     echo "===================================================="
@@ -622,18 +570,12 @@ EOF2
     echo "===================================================="
 }
 
-########################
-# 安装 L2TP + SOCKS5（组合）
-########################
 install_l2tp_socks5() {
     echo -e "${GREEN}>>> 开始安装 L2TP/IPSec + SOCKS5 组合${NC}"
     install_l2tp
     install_socks5
 }
 
-########################
-# 主安装菜单
-########################
 main_menu() {
     show_banner
     echo ""
@@ -647,33 +589,15 @@ main_menu() {
     read -p "请输入选项 (0-4): " CHOICE
 
     case $CHOICE in
-        1)
-            install_l2tp
-            ;;
-        2)
-            install_socks5
-            ;;
-        3)
-            install_vless
-            ;;
-        4)
-            install_l2tp_socks5
-            ;;
-        0)
-            echo "退出。"
-            exit 0
-            ;;
-        *)
-            echo -e "${RED}无效选项！${NC}"
-            read -p "按回车键继续..."
-            main_menu
-            ;;
+        1) install_l2tp ;;
+        2) install_socks5 ;;
+        3) install_vless ;;
+        4) install_l2tp_socks5 ;;
+        0) echo "退出。"; exit 0 ;;
+        *) echo -e "${RED}无效选项！${NC}"; read -p "按回车键继续..."; main_menu ;;
     esac
 }
 
-########################
-# 入口
-########################
 if [ "$(id -u)" -ne 0 ]; then
     echo -e "${RED}请使用 root 用户执行本脚本。${NC}"
     exit 1
