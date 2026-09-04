@@ -2,6 +2,21 @@
 set -e
 
 ########################
+# 自动修复换行符（防止 Windows CRLF 问题）
+########################
+if [[ -f "$0" ]]; then
+    if grep -q $'\r' "$0"; then
+        echo "检测到 Windows 换行符 (CRLF)，正在自动转换..."
+        TMP_FILE=$(mktemp)
+        tr -d '\r' < "$0" > "$TMP_FILE"
+        cat "$TMP_FILE" > "$0"
+        rm -f "$TMP_FILE"
+        echo "换行符已转换为 Unix 格式 (LF)"
+        exec bash "$0" "$@"
+    fi
+fi
+
+########################
 # 可自定义参数（若安装时选择默认，则使用 @NameQC）
 ########################
 VPN_USER="@NameQC"
