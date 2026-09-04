@@ -126,20 +126,14 @@ show_socks5_menu() {
     echo "===================================================="
     echo "当前SOCKS5用户列表："
     if [ -f /etc/danted.conf ]; then
-        # 提取真实用户名
-        local SOCKS_USER=$(grep -E "^user\." /etc/danted.conf | grep -v "notprivileged" | head -1 | awk '{print $2}')
-        if [ -z "$SOCKS_USER" ]; then
-            SOCKS_USER=$(grep -E "^user\.notprivileged:" /etc/danted.conf | head -1 | awk '{print $2}')
-        fi
-        if [ -z "$SOCKS_USER" ]; then
-            SOCKS_USER=$(grep -E "^user\." /etc/danted.conf | head -1 | awk '{print $2}')
-        fi
+        # 从 danted.conf 中读取 socksuser 配置
+        local SOCKS_USER=$(grep -E "^socksuser:" /etc/danted.conf | head -1 | awk '{print $2}')
         
         if [ -n "$SOCKS_USER" ]; then
             echo "  用户名: $SOCKS_USER"
-            # 尝试从保存的凭证文件中读取密码
+            # 从凭证文件读取密码
             if [ -f /root/.socks5_credentials ]; then
-                local SAVED_PASS=$(grep "密码：" /root/.socks5_credentials | head -1 | cut -d'：' -f2)
+                local SAVED_PASS=$(grep "^SOCKS5_PASS=" /root/.socks5_credentials | cut -d'=' -f2)
                 if [ -n "$SAVED_PASS" ]; then
                     echo "  密码: $SAVED_PASS"
                 else
@@ -163,17 +157,14 @@ show_socks5_menu() {
     echo "  2) 修改SOCKS5监听端口"
     echo "  3) 查看SOCKS5服务状态"
     echo "  4) 重启SOCKS5服务"
-    echo "  5) 查看SOCKS5账号密码"
-    echo "  6) 卸载SOCKS5服务"
+    echo "  5) 卸载SOCKS5服务"
     echo "  0) 返回主菜单"
-    read -p "请输入选项 (0-6): " ACTION
+    read -p "请输入选项 (0-5): " ACTION
 
     case $ACTION in
         1)
-            local CURRENT_USER=$(grep -E "^user\." /etc/danted.conf | grep -v "notprivileged" | head -1 | awk '{print $2}')
-            if [ -z "$CURRENT_USER" ]; then
-                CURRENT_USER=$(grep -E "^user\.notprivileged:" /etc/danted.conf | head -1 | awk '{print $2}')
-            fi
+            # 获取当前用户名
+            local CURRENT_USER=$(grep -E "^socksuser:" /etc/danted.conf | head -1 | awk '{print $2}')
             if [ -z "$CURRENT_USER" ]; then
                 echo "错误：无法获取当前SOCKS5用户名！"
                 return 1
@@ -184,9 +175,9 @@ show_socks5_menu() {
             echo "✅ 用户 $CURRENT_USER 的密码已更新！"
             systemctl restart danted
             
-            # 更新保存的凭证文件
+            # 更新凭证文件中的密码
             if [ -f /root/.socks5_credentials ]; then
-                sed -i "s/密码：.*/密码：$NEW_PASS/" /root/.socks5_credentials
+                sed -i "s/^SOCKS5_PASS=.*/SOCKS5_PASS=$NEW_PASS/" /root/.socks5_credentials
                 echo "✅ 凭证文件已同步更新"
             fi
             ;;
@@ -198,26 +189,28 @@ show_socks5_menu() {
                 return 1
             fi
             sed -i "s/internal: 0.0.0.0 port = $CURRENT_PORT/internal: 0.0.0.0 port = $NEW_PORT/" /etc/danted.conf
+            # 更新防火墙规则
+            iptables -D INPUT -p tcp --dport $CURRENT_PORT -j ACCEPT 2>/dev/null
             iptables -A INPUT -p tcp --dport $NEW_PORT -j ACCEPT 2>/dev/null
             netfilter-persistent save 2>/dev/null
             echo "✅ SOCKS5端口已更新为 $NEW_PORT，服务将重启..."
             systemctl restart danted
             
-            # 更新保存的凭证文件中的端口
+            # 更新凭证文件中的端口
             if [ -f /root/.socks5_credentials ]; then
-                sed -i "s/端口：.*/端口：$NEW_PORT/" /root/.socks5_credentials
+                sed -i "s/^SOCKS5_PORT=.*/SOCKS5_PORT=$NEW_PORT/" /root/.socks5_credentials
             fi
             ;;
         3)
             echo ""
             echo "【SOCKS5 服务状态】"
-            systemctl status danted --no-pager 2>/dev/null | grep "Active:"
+            systemctl status danted --no-pager | grep "Active:"
             echo ""
             echo "【端口监听】"
-            ss -tnlp 2>/dev/null | grep danted || echo "  未监听"
+            ss -tnlp | grep danted
             echo ""
             echo "【最新日志】"
-            journalctl -u danted -n 10 --no-pager 2>/dev/null || echo "  无日志"
+            journalctl -u danted -n 10 --no-pager
             ;;
         4)
             echo "正在重启SOCKS5服务..."
@@ -225,20 +218,6 @@ show_socks5_menu() {
             echo "✅ SOCKS5服务已重启！"
             ;;
         5)
-            # 查看SOCKS5账号密码
-            echo ""
-            echo "===================================================="
-            echo "           SOCKS5 账号信息"
-            echo "===================================================="
-            if [ -f /root/.socks5_credentials ]; then
-                cat /root/.socks5_credentials
-            else
-                echo "⚠️  未找到保存的凭证文件"
-                echo "请使用选项1修改密码后，凭证会自动保存"
-            fi
-            echo "===================================================="
-            ;;
-        6)
             read -p "确认要卸载SOCKS5服务吗？(y/n): " CONFIRM
             if [[ "$CONFIRM" == "y" || "$CONFIRM" == "Y" ]]; then
                 echo "正在卸载SOCKS5服务..."
@@ -319,6 +298,7 @@ show_main_menu() {
                     apt remove -y strongswan xl2tpd danted 2>/dev/null
                     rm -rf /etc/ipsec.conf /etc/ipsec.secrets /etc/xl2tpd /etc/ppp/chap-secrets /etc/danted.conf
                     rm -f /usr/local/bin/vpn
+                    rm -f /root/.socks5_credentials
                     echo "✅ 所有服务已卸载！"
                     exit 0
                 else
@@ -540,6 +520,7 @@ external: $WAN_IF
 
 method: username
 user.notprivileged: socks
+socksuser: $SOCKS_USER
 
 client pass {
   from: 0.0.0.0/0 to: 0.0.0.0/0
@@ -567,6 +548,14 @@ EOF2
     # 获取本机公网IP
     SERVER_IP=$(curl -s ifconfig.me || curl -s icanhazip.com || curl -s ipinfo.io/ip || echo "无法自动获取，请手动查询")
 
+    # 保存 SOCKS5 凭证到文件（仅 root 可读）
+    cat > /root/.socks5_credentials <<EOF
+SOCKS5_USER=$SOCKS_USER
+SOCKS5_PASS=$SOCKS_PASS
+SOCKS5_PORT=$SOCKS_PORT
+EOF
+    chmod 600 /root/.socks5_credentials
+
     echo "===================================================="
     echo "#           Telegram联系：@NameQC                   #"
     echo "#    全球服务器 免实名服务器 高防服务器 站群服务器  #"
@@ -583,13 +572,17 @@ EOF2
     echo "  ss -tnlp  | grep $SOCKS_PORT"
     echo "---------------------------------------------------"
     echo "【L2TP/IPsec】"
+    echo "  服务器：$SERVER_IP"
+    echo "  账户：  $VPN_USER"
+    echo "  密码：  $VPN_PASS"
+    echo "  PSK：   $VPN_PSK"
+    echo
+    echo "iPhone / iPad / macOS 设置："
+    echo "  类型：      L2TP"
     echo "  服务器：    $SERVER_IP"
     echo "  账户：      $VPN_USER"
     echo "  密码：      $VPN_PASS"
     echo "  密钥(PSK)： $VPN_PSK"
-    echo
-    echo "iPhone / iPad / macOS 用户设置："
-    echo "  类型：      L2TP"
     echo "  发送所有流量：开启"
     echo
     echo "【SOCKS5】"
