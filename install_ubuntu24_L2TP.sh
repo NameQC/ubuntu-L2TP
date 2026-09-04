@@ -29,7 +29,7 @@ show_banner() {
 ########################
 install_l2tp() {
     echo -e "${GREEN}>>> 开始安装 L2TP/IPSec VPN${NC}"
-    
+
     echo "是否自定义VPN账号密码和预共享密钥？(y/n)"
     echo "输入 y 则自定义，输入 n 或直接回车则使用默认值"
     read -r CUSTOM_CHOICE
@@ -231,6 +231,7 @@ EOF
             echo "无效选项！"
             ;;
     esac
+
     echo ""
     read -p "按回车键继续..."
 }
@@ -272,7 +273,7 @@ EOF
 ########################
 install_socks5() {
     echo -e "${GREEN}>>> 开始安装 SOCKS5 代理${NC}"
-    
+
     echo "是否自定义SOCKS5账号密码？(y/n)"
     echo "输入 y 则自定义，输入 n 或直接回车则使用默认值"
     read -r CUSTOM_CHOICE
@@ -411,6 +412,7 @@ show_socks5_menu() {
             echo "无效选项！"
             ;;
     esac
+
     echo ""
     read -p "按回车键继续..."
 }
@@ -444,7 +446,7 @@ EOF
 ########################
 install_vless() {
     echo -e "${GREEN}>>> 开始安装 VLESS (Xray) 节点${NC}"
-    
+
     echo "是否自定义VLESS配置？(y/n)"
     echo "输入 y 则自定义，输入 n 或直接回车则使用默认值"
     read -r CUSTOM_CHOICE
@@ -582,6 +584,7 @@ show_vless_menu() {
             echo "无效选项！"
             ;;
     esac
+
     echo ""
     read -p "按回车键继续..."
 }
