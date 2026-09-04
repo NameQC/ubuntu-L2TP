@@ -126,14 +126,27 @@ show_socks5_menu() {
     echo "===================================================="
     echo "当前SOCKS5用户列表："
     if [ -f /etc/danted.conf ]; then
-        # 修复：正确提取 user.notprivileged 后面的用户名
-        local SOCKS_USER_LIST=$(grep -E "^user\.notprivileged:" /etc/danted.conf | head -1 | awk '{print $2}')
-        if [ -n "$SOCKS_USER_LIST" ]; then
-            echo "  用户名: $SOCKS_USER_LIST"
-            if grep -q "^$SOCKS_USER_LIST:" /etc/shadow 2>/dev/null; then
-                echo "  密码: 已设置"
+        # 提取真实用户名
+        local SOCKS_USER=$(grep -E "^user\." /etc/danted.conf | grep -v "notprivileged" | head -1 | awk '{print $2}')
+        if [ -z "$SOCKS_USER" ]; then
+            SOCKS_USER=$(grep -E "^user\.notprivileged:" /etc/danted.conf | head -1 | awk '{print $2}')
+        fi
+        if [ -z "$SOCKS_USER" ]; then
+            SOCKS_USER=$(grep -E "^user\." /etc/danted.conf | head -1 | awk '{print $2}')
+        fi
+        
+        if [ -n "$SOCKS_USER" ]; then
+            echo "  用户名: $SOCKS_USER"
+            # 尝试从保存的凭证文件中读取密码
+            if [ -f /root/.socks5_credentials ]; then
+                local SAVED_PASS=$(grep "密码：" /root/.socks5_credentials | head -1 | cut -d'：' -f2)
+                if [ -n "$SAVED_PASS" ]; then
+                    echo "  密码: $SAVED_PASS"
+                else
+                    echo "  密码: 已设置（但未保存明文）"
+                fi
             else
-                echo "  密码: 未设置"
+                echo "  密码: 已设置（未找到凭证文件）"
             fi
         else
             echo "  未找到SOCKS5用户配置"
@@ -150,21 +163,32 @@ show_socks5_menu() {
     echo "  2) 修改SOCKS5监听端口"
     echo "  3) 查看SOCKS5服务状态"
     echo "  4) 重启SOCKS5服务"
+    echo "  5) 查看SOCKS5账号密码"
+    echo "  6) 卸载SOCKS5服务"
     echo "  0) 返回主菜单"
-    read -p "请输入选项 (0-4): " ACTION
+    read -p "请输入选项 (0-6): " ACTION
 
     case $ACTION in
         1)
-            # 这里需要让用户输入要修改的用户名，而不是自动获取
-            read -p "请输入要修改密码的用户名: " MOD_USER
-            if ! id "$MOD_USER" &>/dev/null; then
-                echo "错误：用户 $MOD_USER 不存在！"
+            local CURRENT_USER=$(grep -E "^user\." /etc/danted.conf | grep -v "notprivileged" | head -1 | awk '{print $2}')
+            if [ -z "$CURRENT_USER" ]; then
+                CURRENT_USER=$(grep -E "^user\.notprivileged:" /etc/danted.conf | head -1 | awk '{print $2}')
+            fi
+            if [ -z "$CURRENT_USER" ]; then
+                echo "错误：无法获取当前SOCKS5用户名！"
                 return 1
             fi
+            echo "当前SOCKS5用户: $CURRENT_USER"
             read -p "请输入新密码: " NEW_PASS
-            echo "$MOD_USER:$NEW_PASS" | chpasswd
-            echo "✅ 用户 $MOD_USER 的密码已更新！"
+            echo "$CURRENT_USER:$NEW_PASS" | chpasswd
+            echo "✅ 用户 $CURRENT_USER 的密码已更新！"
             systemctl restart danted
+            
+            # 更新保存的凭证文件
+            if [ -f /root/.socks5_credentials ]; then
+                sed -i "s/密码：.*/密码：$NEW_PASS/" /root/.socks5_credentials
+                echo "✅ 凭证文件已同步更新"
+            fi
             ;;
         2)
             local CURRENT_PORT=$(grep -E "^internal: 0.0.0.0 port =" /etc/danted.conf | awk '{print $5}')
@@ -178,6 +202,11 @@ show_socks5_menu() {
             netfilter-persistent save 2>/dev/null
             echo "✅ SOCKS5端口已更新为 $NEW_PORT，服务将重启..."
             systemctl restart danted
+            
+            # 更新保存的凭证文件中的端口
+            if [ -f /root/.socks5_credentials ]; then
+                sed -i "s/端口：.*/端口：$NEW_PORT/" /root/.socks5_credentials
+            fi
             ;;
         3)
             echo ""
@@ -196,6 +225,20 @@ show_socks5_menu() {
             echo "✅ SOCKS5服务已重启！"
             ;;
         5)
+            # 查看SOCKS5账号密码
+            echo ""
+            echo "===================================================="
+            echo "           SOCKS5 账号信息"
+            echo "===================================================="
+            if [ -f /root/.socks5_credentials ]; then
+                cat /root/.socks5_credentials
+            else
+                echo "⚠️  未找到保存的凭证文件"
+                echo "请使用选项1修改密码后，凭证会自动保存"
+            fi
+            echo "===================================================="
+            ;;
+        6)
             read -p "确认要卸载SOCKS5服务吗？(y/n): " CONFIRM
             if [[ "$CONFIRM" == "y" || "$CONFIRM" == "Y" ]]; then
                 echo "正在卸载SOCKS5服务..."
@@ -203,6 +246,7 @@ show_socks5_menu() {
                 systemctl disable danted 2>/dev/null
                 apt remove -y danted 2>/dev/null
                 rm -f /etc/danted.conf
+                rm -f /root/.socks5_credentials
                 echo "✅ SOCKS5服务已卸载！"
                 INSTALLED_SOCKS5=0
             else
