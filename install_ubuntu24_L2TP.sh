@@ -125,13 +125,12 @@ show_socks5_menu() {
     echo "           SOCKS5 代理管理菜单"
     echo "===================================================="
     echo "当前SOCKS5用户列表："
-    # 从 danted.conf 中提取用户信息（非特权用户和认证用户）
     if [ -f /etc/danted.conf ]; then
-        local SOCKS_USER_LIST=$(grep -E "^user\." /etc/danted.conf | head -1 | awk -F'.' '{print $2}')
+        # 修复：正确提取 user.notprivileged 后面的用户名
+        local SOCKS_USER_LIST=$(grep -E "^user\.notprivileged:" /etc/danted.conf | head -1 | awk '{print $2}')
         if [ -n "$SOCKS_USER_LIST" ]; then
             echo "  用户名: $SOCKS_USER_LIST"
-            # 检查密码是否存在于shadow中（简化处理）
-            if grep -q "^$SOCKS_USER_LIST:" /etc/shadow; then
+            if grep -q "^$SOCKS_USER_LIST:" /etc/shadow 2>/dev/null; then
                 echo "  密码: 已设置"
             else
                 echo "  密码: 未设置"
@@ -156,6 +155,7 @@ show_socks5_menu() {
 
     case $ACTION in
         1)
+            # 这里需要让用户输入要修改的用户名，而不是自动获取
             read -p "请输入要修改密码的用户名: " MOD_USER
             if ! id "$MOD_USER" &>/dev/null; then
                 echo "错误：用户 $MOD_USER 不存在！"
@@ -167,35 +167,47 @@ show_socks5_menu() {
             systemctl restart danted
             ;;
         2)
-            read -p "请输入新的SOCKS5端口 (当前: $SOCKS_PORT): " NEW_PORT
+            local CURRENT_PORT=$(grep -E "^internal: 0.0.0.0 port =" /etc/danted.conf | awk '{print $5}')
+            read -p "请输入新的SOCKS5端口 (当前: $CURRENT_PORT): " NEW_PORT
             if [[ ! "$NEW_PORT" =~ ^[0-9]+$ ]] || [ "$NEW_PORT" -lt 1 ] || [ "$NEW_PORT" -gt 65535 ]; then
                 echo "错误：端口必须是1-65535之间的数字！"
                 return 1
             fi
-            sed -i "s/internal: 0.0.0.0 port = $SOCKS_PORT/internal: 0.0.0.0 port = $NEW_PORT/" /etc/danted.conf
-            sed -i "s/iptables -A INPUT -p tcp --dport $SOCKS_PORT/iptables -A INPUT -p tcp --dport $NEW_PORT/" /etc/danted.conf
-            # 重新加载防火墙规则
-            iptables -A INPUT -p tcp --dport $NEW_PORT -j ACCEPT
-            netfilter-persistent save
+            sed -i "s/internal: 0.0.0.0 port = $CURRENT_PORT/internal: 0.0.0.0 port = $NEW_PORT/" /etc/danted.conf
+            iptables -A INPUT -p tcp --dport $NEW_PORT -j ACCEPT 2>/dev/null
+            netfilter-persistent save 2>/dev/null
             echo "✅ SOCKS5端口已更新为 $NEW_PORT，服务将重启..."
             systemctl restart danted
-            SOCKS_PORT="$NEW_PORT"
             ;;
         3)
             echo ""
             echo "【SOCKS5 服务状态】"
-            systemctl status danted --no-pager | grep "Active:"
+            systemctl status danted --no-pager 2>/dev/null | grep "Active:"
             echo ""
             echo "【端口监听】"
-            ss -tnlp | grep danted
+            ss -tnlp 2>/dev/null | grep danted || echo "  未监听"
             echo ""
             echo "【最新日志】"
-            journalctl -u danted -n 10 --no-pager
+            journalctl -u danted -n 10 --no-pager 2>/dev/null || echo "  无日志"
             ;;
         4)
             echo "正在重启SOCKS5服务..."
             systemctl restart danted
             echo "✅ SOCKS5服务已重启！"
+            ;;
+        5)
+            read -p "确认要卸载SOCKS5服务吗？(y/n): " CONFIRM
+            if [[ "$CONFIRM" == "y" || "$CONFIRM" == "Y" ]]; then
+                echo "正在卸载SOCKS5服务..."
+                systemctl stop danted 2>/dev/null
+                systemctl disable danted 2>/dev/null
+                apt remove -y danted 2>/dev/null
+                rm -f /etc/danted.conf
+                echo "✅ SOCKS5服务已卸载！"
+                INSTALLED_SOCKS5=0
+            else
+                echo "已取消卸载。"
+            fi
             ;;
         0)
             return 0
