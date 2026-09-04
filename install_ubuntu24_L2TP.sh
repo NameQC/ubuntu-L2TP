@@ -1,3 +1,4 @@
+cat > /tmp/install_correct.sh << 'EOF'
 #!/usr/bin/env bash
 set -e
 
@@ -140,7 +141,7 @@ EOF
     if [ -f /usr/local/bin/l2tp-mgr ]; then
         rm -f /usr/local/bin/l2tp-mgr
     fi
-    cat > /usr/local/bin/l2tp-mgr <<'EOF'
+    cat > /usr/local/bin/l2tp-mgr <<'EOF2'
 #!/usr/bin/env bash
 show_l2tp_menu() {
     echo "===================================================="
@@ -241,7 +242,7 @@ if [ -f /etc/ppp/chap-secrets ]; then
 else
     echo "L2TP/IPSec VPN 未安装，请先运行安装脚本。"
 fi
-EOF
+EOF2
     chmod +x /usr/local/bin/l2tp-mgr
 
     SERVER_IP=$(curl -s ifconfig.me || echo "未知")
@@ -334,7 +335,7 @@ EOF
     if [ -f /usr/local/bin/socks5-mgr ]; then
         rm -f /usr/local/bin/socks5-mgr
     fi
-    cat > /usr/local/bin/socks5-mgr <<'EOF'
+    cat > /usr/local/bin/socks5-mgr <<'EOF2'
 #!/usr/bin/env bash
 show_socks5_menu() {
     echo "===================================================="
@@ -422,7 +423,7 @@ if systemctl status danted &>/dev/null; then
 else
     echo "SOCKS5 未安装，请先运行安装脚本。"
 fi
-EOF
+EOF2
     chmod +x /usr/local/bin/socks5-mgr
 
     SERVER_IP=$(curl -s ifconfig.me || echo "未知")
@@ -521,7 +522,7 @@ EOF
     if [ -f /usr/local/bin/vless-mgr ]; then
         rm -f /usr/local/bin/vless-mgr
     fi
-    cat > /usr/local/bin/vless-mgr <<'EOF'
+    cat > /usr/local/bin/vless-mgr <<'EOF2'
 #!/usr/bin/env bash
 show_vless_menu() {
     echo "===================================================="
@@ -594,7 +595,7 @@ if systemctl status xray &>/dev/null; then
 else
     echo "VLESS (Xray) 未安装，请先运行安装脚本。"
 fi
-EOF
+EOF2
     chmod +x /usr/local/bin/vless-mgr
 
     SERVER_IP=$(curl -s ifconfig.me || echo "未知")
@@ -692,3 +693,7 @@ while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
 done
 
 main_menu
+EOF
+
+chmod +x /tmp/install_correct.sh
+bash /tmp/install_correct.sh
