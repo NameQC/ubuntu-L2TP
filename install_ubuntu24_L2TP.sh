@@ -31,7 +31,7 @@ show_menu() {
     echo ""
     echo "          修改 L2TP/IPSec VPN 账号密码"
     echo "===================================================="
-    
+
     # 显示当前用户列表
     echo "当前VPN用户列表："
     if [ -f /etc/ppp/chap-secrets ]; then
@@ -41,7 +41,7 @@ show_menu() {
         echo "===================================================="
         return 1
     fi
-    
+
     echo ""
     echo "请选择要执行的操作："
     echo "  1) 修改现有用户密码"
@@ -53,7 +53,7 @@ show_menu() {
     echo "  7) 卸载VPN"
     echo "  0) 退出"
     read -p "请输入选项 (0-7): " ACTION
-    
+
     case $ACTION in
         1)
             read -p "请输入要修改密码的用户名: " MOD_USER
@@ -63,7 +63,7 @@ show_menu() {
             fi
             read -p "请输入新密码: " NEW_PASS
             sed -i "/^$MOD_USER /s/ [^ ]* / $NEW_PASS /" /etc/ppp/chap-secrets
-            echo "✅ 用户 $MOD_USER 的密码已更新！"
+            echo "用户 $MOD_USER 的密码已更新！"
             systemctl restart xl2tpd
             ;;
         2)
@@ -75,7 +75,7 @@ show_menu() {
             read -p "请输入密码: " NEW_PASS
             echo "$NEW_USER l2tpd $NEW_PASS *" >> /etc/ppp/chap-secrets
             chmod 600 /etc/ppp/chap-secrets
-            echo "✅ 用户 $NEW_USER 已添加！"
+            echo "用户 $NEW_USER 已添加！"
             systemctl restart xl2tpd
             ;;
         3)
@@ -85,7 +85,7 @@ show_menu() {
                 return 1
             fi
             sed -i "/^$DEL_USER /d" /etc/ppp/chap-secrets
-            echo "✅ 用户 $DEL_USER 已删除！"
+            echo "用户 $DEL_USER 已删除！"
             systemctl restart xl2tpd
             ;;
         4)
@@ -93,7 +93,7 @@ show_menu() {
             cat > /etc/ipsec.secrets <<EOF
 : PSK "$NEW_PSK"
 EOF
-            echo "✅ 预共享密钥已更新！"
+            echo "预共享密钥已更新！"
             systemctl restart strongswan-starter
             ;;
         5)
@@ -112,7 +112,7 @@ EOF
             echo "正在重启VPN服务..."
             systemctl restart strongswan-starter
             systemctl restart xl2tpd
-            echo "✅ 服务已重启！"
+            echo "服务已重启！"
             ;;
         7)
             read -p "确认要卸载VPN吗？这将删除所有配置和数据！(y/n): " CONFIRM
@@ -122,8 +122,7 @@ EOF
                 systemctl disable strongswan-starter xl2tpd danted 2>/dev/null
                 apt remove -y strongswan xl2tpd danted 2>/dev/null
                 rm -rf /etc/ipsec.conf /etc/ipsec.secrets /etc/xl2tpd /etc/ppp/chap-secrets
-                echo "✅ VPN已卸载！"
-                # 删除自身命令
+                echo "VPN已卸载！"
                 rm -f /usr/local/bin/l2tp
             else
                 echo "已取消卸载。"
@@ -161,11 +160,11 @@ install_vpn() {
 
     # 交互式询问是否自定义账号密码
     echo "===================================================="
-	echo "           正在安装：L2TP/IPsec + SOCKS5            "
-	echo "===================================================="
+    echo "           正在安装：L2TP/IPsec + SOCKS5            "
+    echo "===================================================="
     echo "是否自定义VPN账号密码和预共享密钥？(y/n)"
     echo "输入 y 则自定义，输入 n 或直接回车则使用默认值"
-	echo "===================================================="
+    echo "===================================================="
     read -r CUSTOM_CHOICE
 
     if [[ "$CUSTOM_CHOICE" == "y" || "$CUSTOM_CHOICE" == "Y" ]]; then
@@ -380,7 +379,7 @@ EOF2
     echo "#         Telegram双向机器人：@NameQCBot            #"
     echo "===================================================="
     echo " 安装完成：L2TP/IPsec + SOCKS5（Ubuntu 24 终极版）"
-	echo "===================================================="
+    echo "===================================================="
     echo "检查命令："
     echo "  ipsec status"
     echo "  journalctl -u strongswan-starter -n 30"
@@ -388,7 +387,7 @@ EOF2
     echo "  journalctl -u danted -n 30"
     echo "  ss -lunp  | grep -E '500|4500|1701'"
     echo "  ss -tnlp  | grep $SOCKS_PORT"
-	echo "---------------------------------------------------"
+    echo "---------------------------------------------------"
     echo "【L2TP/IPsec】"
     echo "  服务器：$SERVER_IP"
     echo "  账户：  $VPN_USER"
@@ -423,7 +422,7 @@ if [[ "$1" == "install" ]]; then
     # 安装完成后，将自身复制为系统命令
     cp -f "$0" /usr/local/bin/l2tp
     chmod +x /usr/local/bin/l2tp
-    echo "✅ 管理命令已安装：输入 'l2tp' 即可管理VPN"
+    echo "管理命令已安装：输入 'l2tp' 即可管理VPN"
 elif [[ "$1" == "--modify" || "$1" == "-m" ]]; then
     # 兼容旧参数
     if [ ! -f /etc/ppp/chap-secrets ]; then
@@ -442,6 +441,6 @@ else
         # 安装完成后，将自身复制为系统命令
         cp -f "$0" /usr/local/bin/l2tp
         chmod +x /usr/local/bin/l2tp
-        echo "✅ 管理命令已安装：输入 'l2tp' 即可管理VPN"
+        echo "管理命令已安装：输入 'l2tp' 即可管理VPN"
     fi
 fi
