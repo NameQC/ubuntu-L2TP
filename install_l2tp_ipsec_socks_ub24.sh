@@ -54,15 +54,6 @@ if [ -n "$CURRENT_HOSTNAME" ] && [ "$CURRENT_HOSTNAME" != "localhost" ] && [ "$C
     fi
 fi
 
-# 同时也检查本地IP映射（适用于多网卡环境）
-LOCAL_IPS=$(ip -4 addr show | grep inet | awk '{print $2}' | cut -d/ -f1 | grep -v "^127\." | head -1)
-if [ -n "$LOCAL_IPS" ] && [ "$CURRENT_HOSTNAME" != "localhost" ]; then
-    if ! grep -q "^$LOCAL_IPS.*$CURRENT_HOSTNAME" /etc/hosts 2>/dev/null; then
-        echo -e "${YELLOW}添加本地IP到hosts...${NC}"
-        echo "$LOCAL_IPS $CURRENT_HOSTNAME" >> /etc/hosts
-    fi
-fi
-
 # 检查系统版本
 if [ -f /etc/os-release ]; then
   . /etc/os-release
@@ -70,7 +61,6 @@ if [ -f /etc/os-release ]; then
     echo -e "${RED}本脚本只针对 Ubuntu 系统，当前系统：$PRETTY_NAME${NC}"
     exit 1
   fi
-  # 支持 Ubuntu 20.04, 22.04, 24.04
   if [[ ! "$VERSION_ID" =~ ^(20|22|24)\. ]]; then
     echo -e "${YELLOW}警告：本脚本测试于 Ubuntu 20.04/22.04/24.04，当前系统：$PRETTY_NAME${NC}"
     echo -e "${YELLOW}继续安装可能不兼容，按 Ctrl+C 取消，或等待5秒继续...${NC}"
@@ -84,7 +74,6 @@ fi
 # 检测外网网卡
 WAN_IF=$(ip route get 1.1.1.1 2>/dev/null | awk '/dev/ {print $5; exit}')
 if [ -z "$WAN_IF" ]; then
-  # 备选方法
   WAN_IF=$(ip route | grep default | awk '{print $5}' | head -1)
   if [ -z "$WAN_IF" ]; then
     echo -e "${RED}无法自动检测外网网卡，请手动修改脚本中的 WAN_IF 变量后再运行。${NC}"
@@ -93,7 +82,7 @@ if [ -z "$WAN_IF" ]; then
 fi
 echo -e "${GREEN}检测到外网网卡：$WAN_IF${NC}"
 
-# 获取公网IP（多种方法备用）
+# 获取公网IP
 PUBLIC_IP=""
 for method in "curl -s ifconfig.me" "curl -s icanhazip.com" "curl -s ipinfo.io/ip" "wget -qO- ifconfig.me"; do
     if PUBLIC_IP=$(eval $method 2>/dev/null) && [ -n "$PUBLIC_IP" ] && [[ "$PUBLIC_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -106,19 +95,51 @@ fi
 echo -e "${GREEN}公网IP：$PUBLIC_IP${NC}"
 
 ########################
-# 安装依赖
+# 安装依赖（修复冲突）
 ########################
 echo -e "${YELLOW}正在更新软件源并安装依赖...${NC}"
 export DEBIAN_FRONTEND=noninteractive
+
+# 先更新包列表
 apt update -y
-apt install -y strongswan xl2tpd ppp iptables iptables-persistent dante-server ufw curl wget
+
+# Ubuntu 24.04 特殊处理：不安装 iptables-persistent 和 netfilter-persistent
+# 因为与 ufw 冲突
+if [[ "$VERSION_ID" =~ ^24\. ]]; then
+    echo -e "${YELLOW}检测到 Ubuntu 24.04，使用兼容模式安装...${NC}"
+    apt install -y strongswan xl2tpd ppp iptables dante-server ufw curl wget
+    # 不安装 iptables-persistent 和 netfilter-persistent
+else
+    apt install -y strongswan xl2tpd ppp iptables iptables-persistent dante-server ufw curl wget
+fi
 
 ########################
-# UFW 防火墙配置
+# 创建 iptables 保存目录（Ubuntu 24.04）
+########################
+if [[ "$VERSION_ID" =~ ^24\. ]]; then
+    mkdir -p /etc/iptables
+    # 创建保存和恢复脚本
+    cat > /etc/network/if-pre-up.d/iptables <<'EOF'
+#!/bin/sh
+/sbin/iptables-restore < /etc/iptables/rules.v4 2>/dev/null || true
+EOF
+    chmod +x /etc/network/if-pre-up.d/iptables
+    
+    cat > /etc/network/if-post-down.d/iptables <<'EOF'
+#!/bin/sh
+/sbin/iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+EOF
+    chmod +x /etc/network/if-post-down.d/iptables
+fi
+
+########################
+# UFW 防火墙配置（先停止防止冲突）
 ########################
 echo -e "${YELLOW}配置 UFW 防火墙...${NC}"
-# 检查 UFW 是否安装
 if command -v ufw &> /dev/null; then
+    # 确保 ufw 不会干扰 iptables
+    ufw --force disable 2>/dev/null || true
+    sleep 2
     ufw --force enable
     ufw allow 22/tcp comment 'SSH'
     ufw allow 500/udp comment 'IPsec IKE'
@@ -227,10 +248,15 @@ echo -e "${YELLOW}配置 iptables...${NC}"
 # 备份现有规则
 iptables-save > /tmp/iptables-backup-$(date +%Y%m%d-%H%M%S).rules 2>/dev/null || true
 
-# 清空旧规则
-iptables -F
-iptables -t nat -F
+# 清空旧规则（保留默认策略）
+iptables -F 2>/dev/null || true
+iptables -t nat -F 2>/dev/null || true
 iptables -X 2>/dev/null || true
+
+# 设置默认策略
+iptables -P INPUT DROP
+iptables -P FORWARD ACCEPT
+iptables -P OUTPUT ACCEPT
 
 # 基础允许
 iptables -A INPUT -i lo -j ACCEPT
@@ -244,7 +270,7 @@ iptables -A INPUT -p udp --dport 1701 -j ACCEPT
 # SOCKS5 端口
 iptables -A INPUT -p tcp --dport $SOCKS_PORT -j ACCEPT
 
-# SSH 端口（防止被锁）
+# SSH 端口
 iptables -A INPUT -p tcp --dport 22 -j ACCEPT
 
 # VPN 网段 NAT
@@ -252,15 +278,14 @@ iptables -A FORWARD -s $VPN_NET -j ACCEPT
 iptables -A FORWARD -d $VPN_NET -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 iptables -t nat -A POSTROUTING -s $VPN_NET -o $WAN_IF -j MASQUERADE
 
-# 设置默认策略（只对 INPUT，保持 FORWARD 和 OUTPUT 为 ACCEPT）
-iptables -P INPUT DROP
-iptables -P FORWARD ACCEPT
-iptables -P OUTPUT ACCEPT
-
 # 保存 iptables 规则
-if command -v netfilter-persistent &> /dev/null; then
+if [[ "$VERSION_ID" =~ ^24\. ]]; then
+    # Ubuntu 24.04: 使用自定义保存
+    iptables-save > /etc/iptables/rules.v4
+    echo -e "${GREEN}iptables 规则已保存到 /etc/iptables/rules.v4${NC}"
+elif command -v netfilter-persistent &> /dev/null; then
     netfilter-persistent save
-elif [ -d /etc/iptables ]; then
+else
     iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
 fi
 
