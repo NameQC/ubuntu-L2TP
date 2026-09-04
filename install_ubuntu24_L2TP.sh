@@ -90,20 +90,20 @@ EOF
             ;;
         5)
             echo ""
-            SERVER_IP=$(curl -s ifconfig.me || curl -s icanhazip.com || echo "未知")
+            SERVER_IP=$(curl -s ifconfig.me 2>/dev/null || curl -s icanhazip.com 2>/dev/null || echo "未知")
             echo "【L2TP/IPsec 连接信息】"
             echo "  服务器IP: $SERVER_IP"
             echo "  当前用户列表："
             grep -v "^#" /etc/ppp/chap-secrets | awk '{print "    用户名: " $1 ", 密码: " $3}'
             echo ""
             echo "【服务状态】"
-            systemctl status strongswan-starter --no-pager | grep "Active:"
-            systemctl status xl2tpd --no-pager | grep "Active:"
+            systemctl status strongswan-starter --no-pager 2>/dev/null | grep "Active:" || echo "  strongSwan: 未运行"
+            systemctl status xl2tpd --no-pager 2>/dev/null | grep "Active:" || echo "  xl2tpd: 未运行"
             ;;
         6)
             echo "正在重启VPN服务..."
-            systemctl restart strongswan-starter
-            systemctl restart xl2tpd
+            systemctl restart strongswan-starter 2>/dev/null
+            systemctl restart xl2tpd 2>/dev/null
             echo "✅ 服务已重启！"
             ;;
         0)
@@ -126,24 +126,18 @@ show_socks5_menu() {
     echo "===================================================="
     echo "当前SOCKS5用户列表："
     if [ -f /etc/danted.conf ]; then
-        # 从 danted.conf 中读取 socksuser 配置
-        local SOCKS_USER=$(grep -E "^socksuser:" /etc/danted.conf | head -1 | awk '{print $2}')
-        
-        if [ -n "$SOCKS_USER" ]; then
-            echo "  用户名: $SOCKS_USER"
-            # 从凭证文件读取密码
-            if [ -f /root/.socks5_credentials ]; then
-                local SAVED_PASS=$(grep "^SOCKS5_PASS=" /root/.socks5_credentials | cut -d'=' -f2)
-                if [ -n "$SAVED_PASS" ]; then
-                    echo "  密码: $SAVED_PASS"
-                else
-                    echo "  密码: 已设置（但未保存明文）"
-                fi
+        # 从凭证文件读取用户名和密码
+        if [ -f /root/.socks5_credentials ]; then
+            local SOCKS_USER=$(grep "^SOCKS5_USER=" /root/.socks5_credentials | cut -d'=' -f2)
+            local SOCKS_PASS=$(grep "^SOCKS5_PASS=" /root/.socks5_credentials | cut -d'=' -f2)
+            if [ -n "$SOCKS_USER" ]; then
+                echo "  用户名: $SOCKS_USER"
+                echo "  密码: $SOCKS_PASS"
             else
-                echo "  密码: 已设置（未找到凭证文件）"
+                echo "  未找到SOCKS5用户配置"
             fi
         else
-            echo "  未找到SOCKS5用户配置"
+            echo "  未找到SOCKS5凭证文件"
         fi
     else
         echo "  (未检测到SOCKS5安装，请先运行 'vpn install' 进行安装)"
@@ -163,8 +157,8 @@ show_socks5_menu() {
 
     case $ACTION in
         1)
-            # 获取当前用户名
-            local CURRENT_USER=$(grep -E "^socksuser:" /etc/danted.conf | head -1 | awk '{print $2}')
+            # 从凭证文件读取用户名
+            local CURRENT_USER=$(grep "^SOCKS5_USER=" /root/.socks5_credentials | cut -d'=' -f2)
             if [ -z "$CURRENT_USER" ]; then
                 echo "错误：无法获取当前SOCKS5用户名！"
                 return 1
@@ -204,13 +198,13 @@ show_socks5_menu() {
         3)
             echo ""
             echo "【SOCKS5 服务状态】"
-            systemctl status danted --no-pager | grep "Active:"
+            systemctl status danted --no-pager 2>/dev/null | grep "Active:"
             echo ""
             echo "【端口监听】"
-            ss -tnlp | grep danted
+            ss -tnlp 2>/dev/null | grep danted || echo "  未监听"
             echo ""
             echo "【最新日志】"
-            journalctl -u danted -n 10 --no-pager
+            journalctl -u danted -n 10 --no-pager 2>/dev/null || echo "  无日志"
             ;;
         4)
             echo "正在重启SOCKS5服务..."
@@ -227,7 +221,6 @@ show_socks5_menu() {
                 rm -f /etc/danted.conf
                 rm -f /root/.socks5_credentials
                 echo "✅ SOCKS5服务已卸载！"
-                INSTALLED_SOCKS5=0
             else
                 echo "已取消卸载。"
             fi
@@ -278,14 +271,14 @@ show_main_menu() {
                 echo "              服务整体状态"
                 echo "===================================================="
                 echo "【L2TP/IPSec】"
-                systemctl status strongswan-starter --no-pager | grep "Active:"
-                systemctl status xl2tpd --no-pager | grep "Active:"
+                systemctl status strongswan-starter --no-pager 2>/dev/null | grep "Active:" || echo "  未安装或未运行"
+                systemctl status xl2tpd --no-pager 2>/dev/null | grep "Active:" || echo "  未安装或未运行"
                 echo ""
                 echo "【SOCKS5】"
-                systemctl status danted --no-pager | grep "Active:"
+                systemctl status danted --no-pager 2>/dev/null | grep "Active:" || echo "  未安装或未运行"
                 echo ""
                 echo "【端口监听】"
-                ss -lunp | grep -E '500|4500|1701|1080'
+                ss -lunp 2>/dev/null | grep -E '500|4500|1701|1080' || echo "  无相关端口"
                 echo ""
                 read -p "按回车键继续..."
                 ;;
@@ -387,7 +380,7 @@ install_vpn() {
     ########################
     export DEBIAN_FRONTEND=noninteractive
     apt update -y
-    apt install -y strongswan xl2tpd ppp iptables iptables-persistent dante-server
+    apt install -y strongswan xl2tpd ppp iptables iptables-persistent danted
 
     ########################
     # IP 转发 & 内核参数
@@ -459,9 +452,6 @@ refuse-pap
 refuse-chap
 require-mschap-v2
 
-# MPPE 加密不强制，完全由 IPsec 负责隧道加密
-# require-mppe-128
-
 mtu 1400
 mru 1400
 
@@ -478,49 +468,41 @@ EOF2
     ########################
     # iptables NAT & 端口放行
     ########################
-    # 清空旧规则（假设新机器上没自定义防火墙）
     iptables -F
     iptables -t nat -F
 
-    # 基础允许：回环、本机已建立连接
     iptables -A INPUT -i lo -j ACCEPT
     iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
-    # IPsec / L2TP 端口
     iptables -A INPUT -p udp --dport 500  -j ACCEPT
     iptables -A INPUT -p udp --dport 4500 -j ACCEPT
     iptables -A INPUT -p udp --dport 1701 -j ACCEPT
 
-    # SOCKS5 端口
     iptables -A INPUT -p tcp --dport $SOCKS_PORT -j ACCEPT
 
-    # VPN 网段 NAT
     iptables -A FORWARD -s $VPN_NET -j ACCEPT
     iptables -A FORWARD -d $VPN_NET -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
     iptables -t nat -A POSTROUTING -s $VPN_NET -o $WAN_IF -j MASQUERADE
 
-    # 保持其余 INPUT 默认策略为 ACCEPT，避免误杀其他服务
     netfilter-persistent save
 
     ########################
-    # Dante SOCKS5 配置
+    # Dante SOCKS5 配置（使用 socksmethod 替代 method）
     ########################
-    # 非特权运行用户
     id socks >/dev/null 2>&1 || useradd -r -s /usr/sbin/nologin socks
 
-    # SOCKS 登录用户
-    id "$SOCKS_USER" >/dev/null 2>&1 || useradd -M -s /usr/sbin/nologin "$SOCKS_USER" || true
+    id "$SOCKS_USER" >/dev/null 2>&1 || useradd -M -s /usr/sbin/nologin "$SOCKS_USER"
     echo "$SOCKS_USER:$SOCKS_PASS" | chpasswd
 
+    # 使用 /tmp 作为日志目录（避免只读文件系统问题）
     cat > /etc/danted.conf <<EOF2
-logoutput: /var/log/danted.log
+logoutput: /tmp/danted.log
 
 internal: 0.0.0.0 port = $SOCKS_PORT
 external: $WAN_IF
 
-method: username
+socksmethod: username
 user.notprivileged: socks
-socksuser: $SOCKS_USER
 
 client pass {
   from: 0.0.0.0/0 to: 0.0.0.0/0
@@ -534,6 +516,10 @@ pass {
 }
 EOF2
 
+    # 创建日志文件
+    touch /tmp/danted.log
+    chmod 644 /tmp/danted.log
+
     systemctl enable danted
     systemctl restart danted
 
@@ -546,7 +532,7 @@ EOF2
     systemctl restart xl2tpd
 
     # 获取本机公网IP
-    SERVER_IP=$(curl -s ifconfig.me || curl -s icanhazip.com || curl -s ipinfo.io/ip || echo "无法自动获取，请手动查询")
+    SERVER_IP=$(curl -s ifconfig.me 2>/dev/null || curl -s icanhazip.com 2>/dev/null || curl -s ipinfo.io/ip 2>/dev/null || echo "无法自动获取，请手动查询")
 
     # 保存 SOCKS5 凭证到文件（仅 root 可读）
     cat > /root/.socks5_credentials <<EOF
