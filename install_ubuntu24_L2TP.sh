@@ -2,21 +2,6 @@
 set -e
 
 ########################
-# 自动修复换行符（防止 Windows CRLF 问题）
-########################
-if [[ -f "$0" ]]; then
-    if grep -q $'\r' "$0"; then
-        echo "检测到 Windows 换行符 (CRLF)，正在自动转换..."
-        TMP_FILE=$(mktemp)
-        tr -d '\r' < "$0" > "$TMP_FILE"
-        cat "$TMP_FILE" > "$0"
-        rm -f "$TMP_FILE"
-        echo "换行符已转换为 Unix 格式 (LF)"
-        exec bash "$0" "$@"
-    fi
-fi
-
-########################
 # 可自定义参数（若安装时选择默认，则使用 @NameQC）
 ########################
 VPN_USER="@NameQC"
@@ -34,32 +19,6 @@ SOCKS_USER="NameQC"
 SOCKS_PASS="NameQC"
 SOCKS_PORT=1080
 
-# VLESS 配置
-VLESS_PORT=443
-VLESS_UUID=""
-VLESS_PATH="/"
-
-########################
-# 函数：检测已安装服务
-########################
-check_installed_services() {
-    INSTALLED_L2TP=0
-    INSTALLED_SOCKS5=0
-    INSTALLED_VLESS=0
-    
-    if [ -f /etc/ppp/chap-secrets ] && [ -f /etc/ipsec.conf ]; then
-        INSTALLED_L2TP=1
-    fi
-    
-    if [ -f /etc/danted.conf ] && systemctl list-units --type=service 2>/dev/null | grep -q danted; then
-        INSTALLED_SOCKS5=1
-    fi
-    
-    if [ -f /usr/local/bin/xray ] || [ -f /usr/local/bin/v2ray ]; then
-        INSTALLED_VLESS=1
-    fi
-}
-
 ########################
 # 函数：L2TP 管理菜单
 ########################
@@ -67,16 +26,13 @@ show_l2tp_menu() {
     echo "===================================================="
     echo "           L2TP/IPSec VPN 管理菜单"
     echo "===================================================="
-    if [ $INSTALLED_L2TP -eq 0 ]; then
-        echo "⚠️  L2TP/IPSec VPN 未安装，请先安装"
-        echo "===================================================="
-        read -p "按回车键继续..."
-        return 1
-    fi
-    
     echo "当前VPN用户列表："
     if [ -f /etc/ppp/chap-secrets ]; then
         grep -v "^#" /etc/ppp/chap-secrets | awk '{print "  用户名: " $1 " | 密码: " $3}'
+    else
+        echo "  (未检测到VPN安装，请先运行 'vpn install' 进行安装)"
+        echo "===================================================="
+        return 1
     fi
 
     echo ""
@@ -87,9 +43,8 @@ show_l2tp_menu() {
     echo "  4) 修改预共享密钥(PSK)"
     echo "  5) 查看VPN连接信息"
     echo "  6) 重启VPN服务"
-    echo "  7) 卸载L2TP服务"
     echo "  0) 返回主菜单"
-    read -p "请输入选项 (0-7): " ACTION
+    read -p "请输入选项 (0-6): " ACTION
 
     case $ACTION in
         1)
@@ -135,35 +90,21 @@ EOF
             ;;
         5)
             echo ""
-            SERVER_IP=$(curl -s ifconfig.me 2>/dev/null || curl -s icanhazip.com 2>/dev/null || echo "未知")
+            SERVER_IP=$(curl -s ifconfig.me || curl -s icanhazip.com || echo "未知")
             echo "【L2TP/IPsec 连接信息】"
             echo "  服务器IP: $SERVER_IP"
             echo "  当前用户列表："
             grep -v "^#" /etc/ppp/chap-secrets | awk '{print "    用户名: " $1 ", 密码: " $3}'
             echo ""
             echo "【服务状态】"
-            systemctl status strongswan-starter --no-pager 2>/dev/null | grep "Active:" || echo "  strongSwan: 未运行"
-            systemctl status xl2tpd --no-pager 2>/dev/null | grep "Active:" || echo "  xl2tpd: 未运行"
+            systemctl status strongswan-starter --no-pager | grep "Active:"
+            systemctl status xl2tpd --no-pager | grep "Active:"
             ;;
         6)
             echo "正在重启VPN服务..."
-            systemctl restart strongswan-starter 2>/dev/null
-            systemctl restart xl2tpd 2>/dev/null
+            systemctl restart strongswan-starter
+            systemctl restart xl2tpd
             echo "✅ 服务已重启！"
-            ;;
-        7)
-            read -p "确认要卸载L2TP服务吗？(y/n): " CONFIRM
-            if [[ "$CONFIRM" == "y" || "$CONFIRM" == "Y" ]]; then
-                echo "正在卸载L2TP服务..."
-                systemctl stop strongswan-starter xl2tpd 2>/dev/null
-                systemctl disable strongswan-starter xl2tpd 2>/dev/null
-                apt remove -y strongswan xl2tpd 2>/dev/null
-                rm -rf /etc/ipsec.conf /etc/ipsec.secrets /etc/xl2tpd /etc/ppp/chap-secrets
-                echo "✅ L2TP服务已卸载！"
-                INSTALLED_L2TP=0
-            else
-                echo "已取消卸载。"
-            fi
             ;;
         0)
             return 0
@@ -183,19 +124,14 @@ show_socks5_menu() {
     echo "===================================================="
     echo "           SOCKS5 代理管理菜单"
     echo "===================================================="
-    if [ $INSTALLED_SOCKS5 -eq 0 ]; then
-        echo "⚠️  SOCKS5 代理未安装，请先安装"
-        echo "===================================================="
-        read -p "按回车键继续..."
-        return 1
-    fi
-    
     echo "当前SOCKS5用户列表："
+    # 从 danted.conf 中提取用户信息（非特权用户和认证用户）
     if [ -f /etc/danted.conf ]; then
         local SOCKS_USER_LIST=$(grep -E "^user\." /etc/danted.conf | head -1 | awk -F'.' '{print $2}')
         if [ -n "$SOCKS_USER_LIST" ]; then
             echo "  用户名: $SOCKS_USER_LIST"
-            if grep -q "^$SOCKS_USER_LIST:" /etc/shadow 2>/dev/null; then
+            # 检查密码是否存在于shadow中（简化处理）
+            if grep -q "^$SOCKS_USER_LIST:" /etc/shadow; then
                 echo "  密码: 已设置"
             else
                 echo "  密码: 未设置"
@@ -203,6 +139,10 @@ show_socks5_menu() {
         else
             echo "  未找到SOCKS5用户配置"
         fi
+    else
+        echo "  (未检测到SOCKS5安装，请先运行 'vpn install' 进行安装)"
+        echo "===================================================="
+        return 1
     fi
 
     echo ""
@@ -211,9 +151,8 @@ show_socks5_menu() {
     echo "  2) 修改SOCKS5监听端口"
     echo "  3) 查看SOCKS5服务状态"
     echo "  4) 重启SOCKS5服务"
-    echo "  5) 卸载SOCKS5服务"
     echo "  0) 返回主菜单"
-    read -p "请输入选项 (0-5): " ACTION
+    read -p "请输入选项 (0-4): " ACTION
 
     case $ACTION in
         1)
@@ -228,48 +167,36 @@ show_socks5_menu() {
             systemctl restart danted
             ;;
         2)
-            local CURRENT_PORT=$(grep -E "^internal: 0.0.0.0 port =" /etc/danted.conf | awk '{print $5}')
-            read -p "请输入新的SOCKS5端口 (当前: $CURRENT_PORT): " NEW_PORT
+            read -p "请输入新的SOCKS5端口 (当前: $SOCKS_PORT): " NEW_PORT
             if [[ ! "$NEW_PORT" =~ ^[0-9]+$ ]] || [ "$NEW_PORT" -lt 1 ] || [ "$NEW_PORT" -gt 65535 ]; then
                 echo "错误：端口必须是1-65535之间的数字！"
                 return 1
             fi
-            sed -i "s/internal: 0.0.0.0 port = $CURRENT_PORT/internal: 0.0.0.0 port = $NEW_PORT/" /etc/danted.conf
-            iptables -A INPUT -p tcp --dport $NEW_PORT -j ACCEPT 2>/dev/null
-            netfilter-persistent save 2>/dev/null
+            sed -i "s/internal: 0.0.0.0 port = $SOCKS_PORT/internal: 0.0.0.0 port = $NEW_PORT/" /etc/danted.conf
+            sed -i "s/iptables -A INPUT -p tcp --dport $SOCKS_PORT/iptables -A INPUT -p tcp --dport $NEW_PORT/" /etc/danted.conf
+            # 重新加载防火墙规则
+            iptables -A INPUT -p tcp --dport $NEW_PORT -j ACCEPT
+            netfilter-persistent save
             echo "✅ SOCKS5端口已更新为 $NEW_PORT，服务将重启..."
             systemctl restart danted
+            SOCKS_PORT="$NEW_PORT"
             ;;
         3)
             echo ""
             echo "【SOCKS5 服务状态】"
-            systemctl status danted --no-pager 2>/dev/null | grep "Active:"
+            systemctl status danted --no-pager | grep "Active:"
             echo ""
             echo "【端口监听】"
-            ss -tnlp 2>/dev/null | grep danted || echo "  未监听"
+            ss -tnlp | grep danted
             echo ""
             echo "【最新日志】"
-            journalctl -u danted -n 10 --no-pager 2>/dev/null || echo "  无日志"
+            journalctl -u danted -n 10 --no-pager
             ;;
         4)
             echo "正在重启SOCKS5服务..."
             systemctl restart danted
             echo "✅ SOCKS5服务已重启！"
             ;;
-        5)
-            read -p "确认要卸载SOCKS5服务吗？(y/n): " CONFIRM
-            if [[ "$CONFIRM" == "y" || "$CONFIRM" == "Y" ]]; then
-                echo "正在卸载SOCKS5服务..."
-                systemctl stop danted 2>/dev/null
-                systemctl disable danted 2>/dev/null
-                apt remove -y danted 2>/dev/null
-                rm -f /etc/danted.conf
-                echo "✅ SOCKS5服务已卸载！"
-                INSTALLED_SOCKS5=0
-            else
-                echo "已取消卸载。"
-            fi
-            ;;
         0)
             return 0
             ;;
@@ -278,180 +205,6 @@ show_socks5_menu() {
             ;;
     esac
     echo ""
-    read -p "按回车键继续..."
-}
-
-########################
-# 函数：VLESS 管理菜单
-########################
-show_vless_menu() {
-    echo "===================================================="
-    echo "           VLESS 代理管理菜单"
-    echo "===================================================="
-    if [ $INSTALLED_VLESS -eq 0 ]; then
-        echo "⚠️  VLESS 代理未安装，请先安装"
-        echo "===================================================="
-        read -p "按回车键继续..."
-        return 1
-    fi
-    
-    # 检测使用Xray还是v2ray
-    if [ -f /usr/local/bin/xray ]; then
-        VLESS_BIN="xray"
-        VLESS_SERVICE="xray"
-    else
-        VLESS_BIN="v2ray"
-        VLESS_SERVICE="v2ray"
-    fi
-    
-    echo "当前VLESS配置信息："
-    if [ -f /usr/local/etc/$VLESS_BIN/config.json ]; then
-        local PORT=$(grep -o '"port": [0-9]*' /usr/local/etc/$VLESS_BIN/config.json 2>/dev/null | head -1 | awk '{print $2}')
-        local UUID=$(grep -o '"id": "[^"]*"' /usr/local/etc/$VLESS_BIN/config.json 2>/dev/null | head -1 | cut -d'"' -f4)
-        local PATH=$(grep -o '"path": "[^"]*"' /usr/local/etc/$VLESS_BIN/config.json 2>/dev/null | head -1 | cut -d'"' -f4)
-        echo "  端口: ${PORT:-未设置}"
-        echo "  UUID: ${UUID:-未设置}"
-        echo "  Path: ${PATH:-/}"
-    fi
-
-    echo ""
-    echo "请选择要执行的操作："
-    echo "  1) 修改VLESS端口"
-    echo "  2) 修改VLESS UUID"
-    echo "  3) 修改VLESS Path"
-    echo "  4) 查看VLESS服务状态"
-    echo "  5) 重启VLESS服务"
-    echo "  6) 显示VLESS连接URL"
-    echo "  7) 卸载VLESS服务"
-    echo "  0) 返回主菜单"
-    read -p "请输入选项 (0-7): " ACTION
-
-    case $ACTION in
-        1)
-            local CURRENT_PORT=$(grep -o '"port": [0-9]*' /usr/local/etc/$VLESS_BIN/config.json 2>/dev/null | head -1 | awk '{print $2}')
-            read -p "请输入新的端口 (当前: ${CURRENT_PORT:-443}): " NEW_PORT
-            if [[ ! "$NEW_PORT" =~ ^[0-9]+$ ]] || [ "$NEW_PORT" -lt 1 ] || [ "$NEW_PORT" -gt 65535 ]; then
-                echo "错误：端口必须是1-65535之间的数字！"
-                return 1
-            fi
-            sed -i "s/\"port\": [0-9]*/\"port\": $NEW_PORT/" /usr/local/etc/$VLESS_BIN/config.json
-            echo "✅ 端口已更新为 $NEW_PORT"
-            systemctl restart $VLESS_SERVICE
-            ;;
-        2)
-            local NEW_UUID=$(cat /proc/sys/kernel/random/uuid)
-            echo "生成新UUID: $NEW_UUID"
-            read -p "确认使用此UUID？(y/n): " CONFIRM
-            if [[ "$CONFIRM" == "y" || "$CONFIRM" == "Y" ]]; then
-                sed -i "s/\"id\": \"[^\"]*\"/\"id\": \"$NEW_UUID\"/" /usr/local/etc/$VLESS_BIN/config.json
-                echo "✅ UUID已更新"
-                systemctl restart $VLESS_SERVICE
-            fi
-            ;;
-        3)
-            local CURRENT_PATH=$(grep -o '"path": "[^"]*"' /usr/local/etc/$VLESS_BIN/config.json 2>/dev/null | head -1 | cut -d'"' -f4)
-            read -p "请输入新的Path (当前: ${CURRENT_PATH:-/}): " NEW_PATH
-            if [ -z "$NEW_PATH" ]; then
-                NEW_PATH="/"
-            fi
-            sed -i "s/\"path\": \"[^\"]*\"/\"path\": \"$NEW_PATH\"/" /usr/local/etc/$VLESS_BIN/config.json
-            echo "✅ Path已更新为 $NEW_PATH"
-            systemctl restart $VLESS_SERVICE
-            ;;
-        4)
-            echo ""
-            echo "【VLESS 服务状态】"
-            systemctl status $VLESS_SERVICE --no-pager 2>/dev/null | grep "Active:"
-            echo ""
-            echo "【端口监听】"
-            local PORT=$(grep -o '"port": [0-9]*' /usr/local/etc/$VLESS_BIN/config.json 2>/dev/null | head -1 | awk '{print $2}')
-            ss -tnlp 2>/dev/null | grep ":$PORT" || echo "  未监听"
-            echo ""
-            echo "【最新日志】"
-            journalctl -u $VLESS_SERVICE -n 10 --no-pager 2>/dev/null || echo "  无日志"
-            ;;
-        5)
-            echo "正在重启VLESS服务..."
-            systemctl restart $VLESS_SERVICE
-            echo "✅ VLESS服务已重启！"
-            ;;
-        6)
-            show_vless_url
-            ;;
-        7)
-            read -p "确认要卸载VLESS服务吗？(y/n): " CONFIRM
-            if [[ "$CONFIRM" == "y" || "$CONFIRM" == "Y" ]]; then
-                echo "正在卸载VLESS服务..."
-                systemctl stop $VLESS_SERVICE 2>/dev/null
-                systemctl disable $VLESS_SERVICE 2>/dev/null
-                rm -rf /usr/local/etc/$VLESS_BIN
-                rm -f /usr/local/bin/$VLESS_BIN
-                rm -f /etc/systemd/system/$VLESS_SERVICE.service
-                systemctl daemon-reload
-                echo "✅ VLESS服务已卸载！"
-                INSTALLED_VLESS=0
-            else
-                echo "已取消卸载。"
-            fi
-            ;;
-        0)
-            return 0
-            ;;
-        *)
-            echo "无效选项！"
-            ;;
-    esac
-    echo ""
-    read -p "按回车键继续..."
-}
-
-########################
-# 函数：显示VLESS连接URL
-########################
-show_vless_url() {
-    if [ $INSTALLED_VLESS -eq 0 ]; then
-        echo "VLESS未安装"
-        return 1
-    fi
-    
-    if [ -f /usr/local/bin/xray ]; then
-        VLESS_BIN="xray"
-    else
-        VLESS_BIN="v2ray"
-    fi
-    
-    local PORT=$(grep -o '"port": [0-9]*' /usr/local/etc/$VLESS_BIN/config.json 2>/dev/null | head -1 | awk '{print $2}')
-    local UUID=$(grep -o '"id": "[^"]*"' /usr/local/etc/$VLESS_BIN/config.json 2>/dev/null | head -1 | cut -d'"' -f4)
-    local PATH=$(grep -o '"path": "[^"]*"' /usr/local/etc/$VLESS_BIN/config.json 2>/dev/null | head -1 | cut -d'"' -f4)
-    local DOMAIN=$(curl -s ifconfig.me 2>/dev/null || curl -s icanhazip.com 2>/dev/null || echo "未知")
-    
-    echo ""
-    echo "===================================================="
-    echo "           VLESS 连接信息"
-    echo "===================================================="
-    echo "  服务器: $DOMAIN"
-    echo "  端口: ${PORT:-443}"
-    echo "  UUID: ${UUID:-未设置}"
-    echo "  Path: ${PATH:-/}"
-    echo ""
-    echo "【VLESS链接】"
-    echo "vless://${UUID:-}@$DOMAIN:${PORT:-443}?encryption=none&security=none&type=ws&path=${PATH:-/}#VLESS"
-    echo ""
-    echo "【客户端配置】"
-    echo "{"
-    echo "  \"v\": \"2\","
-    echo "  \"ps\": \"VLESS\","
-    echo "  \"add\": \"$DOMAIN\","
-    echo "  \"port\": \"${PORT:-443}\","
-    echo "  \"id\": \"${UUID:-}\","
-    echo "  \"aid\": \"0\","
-    echo "  \"net\": \"ws\","
-    echo "  \"type\": \"none\","
-    echo "  \"host\": \"\","
-    echo "  \"path\": \"${PATH:-/}\","
-    echo "  \"tls\": \"none\""
-    echo "}"
-    echo "===================================================="
     read -p "按回车键继续..."
 }
 
@@ -466,16 +219,13 @@ show_main_menu() {
         echo "#    全球服务器 免实名服务器 高防服务器 站群服务器  #"
         echo "#         Telegram双向机器人：@NameQCBot            #"
         echo "===================================================="
-        echo "              QC 综合管理菜单"
+        echo "              VPN 综合管理菜单"
         echo "===================================================="
-        
-        check_installed_services
-        
         echo ""
-        echo "  1) 管理 L2TP/IPSec VPN $([ $INSTALLED_L2TP -eq 1 ] && echo "[已安装]" || echo "[未安装]")"
-        echo "  2) 管理 SOCKS5 代理 $([ $INSTALLED_SOCKS5 -eq 1 ] && echo "[已安装]" || echo "[未安装]")"
-        echo "  3) 管理 VLESS 代理 $([ $INSTALLED_VLESS -eq 1 ] && echo "[已安装]" || echo "[未安装]")"
-        echo "  4) 查看服务整体状态"
+        echo "  1) 管理 L2TP/IPSec VPN"
+        echo "  2) 管理 SOCKS5 代理"
+        echo "  3) 查看服务整体状态"
+        echo "  4) 卸载所有服务"
         echo "  0) 退出"
         echo ""
         read -p "请输入选项 (0-4): " MAIN_CHOICE
@@ -488,10 +238,36 @@ show_main_menu() {
                 show_socks5_menu
                 ;;
             3)
-                show_vless_menu
+                echo ""
+                echo "===================================================="
+                echo "              服务整体状态"
+                echo "===================================================="
+                echo "【L2TP/IPSec】"
+                systemctl status strongswan-starter --no-pager | grep "Active:"
+                systemctl status xl2tpd --no-pager | grep "Active:"
+                echo ""
+                echo "【SOCKS5】"
+                systemctl status danted --no-pager | grep "Active:"
+                echo ""
+                echo "【端口监听】"
+                ss -lunp | grep -E '500|4500|1701|1080'
+                echo ""
+                read -p "按回车键继续..."
                 ;;
             4)
-                show_service_status
+                read -p "确认要卸载所有服务吗？这将删除所有配置和数据！(y/n): " CONFIRM
+                if [[ "$CONFIRM" == "y" || "$CONFIRM" == "Y" ]]; then
+                    echo "正在卸载..."
+                    systemctl stop strongswan-starter xl2tpd danted 2>/dev/null
+                    systemctl disable strongswan-starter xl2tpd danted 2>/dev/null
+                    apt remove -y strongswan xl2tpd danted 2>/dev/null
+                    rm -rf /etc/ipsec.conf /etc/ipsec.secrets /etc/xl2tpd /etc/ppp/chap-secrets /etc/danted.conf
+                    rm -f /usr/local/bin/vpn
+                    echo "✅ 所有服务已卸载！"
+                    exit 0
+                else
+                    echo "已取消卸载。"
+                fi
                 ;;
             0)
                 echo "退出。"
@@ -506,63 +282,23 @@ show_main_menu() {
 }
 
 ########################
-# 函数：查看服务整体状态
+# 主安装流程
 ########################
-show_service_status() {
-    echo ""
-    echo "===================================================="
-    echo "              服务整体状态"
-    echo "===================================================="
-    
-    check_installed_services
-    
-    echo "【L2TP/IPSec】$([ $INSTALLED_L2TP -eq 1 ] && echo "[已安装]" || echo "[未安装]")"
-    if [ $INSTALLED_L2TP -eq 1 ]; then
-        systemctl status strongswan-starter --no-pager 2>/dev/null | grep "Active:" || echo "  strongSwan: 未运行"
-        systemctl status xl2tpd --no-pager 2>/dev/null | grep "Active:" || echo "  xl2tpd: 未运行"
+install_vpn() {
+    # 检查是否已安装
+    if [ -f /etc/ppp/chap-secrets ]; then
+        echo "检测到VPN已安装，输入 'vpn' 命令进行管理。"
+        echo "如需重新安装，请先运行 'vpn' 选择 '4) 卸载所有服务'"
+        exit 0
     fi
-    echo ""
-    
-    echo "【SOCKS5】$([ $INSTALLED_SOCKS5 -eq 1 ] && echo "[已安装]" || echo "[未安装]")"
-    if [ $INSTALLED_SOCKS5 -eq 1 ]; then
-        systemctl status danted --no-pager 2>/dev/null | grep "Active:" || echo "  未运行"
-    fi
-    echo ""
-    
-    echo "【VLESS】$([ $INSTALLED_VLESS -eq 1 ] && echo "[已安装]" || echo "[未安装]")"
-    if [ $INSTALLED_VLESS -eq 1 ]; then
-        if [ -f /usr/local/bin/xray ]; then
-            systemctl status xray --no-pager 2>/dev/null | grep "Active:" || echo "  未运行"
-        elif [ -f /usr/local/bin/v2ray ]; then
-            systemctl status v2ray --no-pager 2>/dev/null | grep "Active:" || echo "  未运行"
-        fi
-    fi
-    echo ""
-    
-    echo "【端口监听】"
-    ss -lunp 2>/dev/null | grep -E '500|4500|1701|1080|443|80' || echo "  无相关端口"
-    echo ""
-    read -p "按回车键继续..."
-}
 
-########################
-# 函数：安装 L2TP
-########################
-install_l2tp() {
+    # 交互式询问是否自定义账号密码
     echo "===================================================="
-    echo "           正在安装：L2TP/IPSec VPN"
+    echo "           正在安装：L2TP/IPsec + SOCKS5            "
     echo "===================================================="
-    
-    if [ $INSTALLED_L2TP -eq 1 ]; then
-        echo "检测到L2TP已安装"
-        read -p "是否重新安装？(y/n): " REINSTALL
-        if [[ "$REINSTALL" != "y" && "$REINSTALL" != "Y" ]]; then
-            return 0
-        fi
-    fi
-    
     echo "是否自定义VPN账号密码和预共享密钥？(y/n)"
     echo "输入 y 则自定义，输入 n 或直接回车则使用默认值"
+    echo "===================================================="
     read -r CUSTOM_CHOICE
 
     if [[ "$CUSTOM_CHOICE" == "y" || "$CUSTOM_CHOICE" == "Y" ]]; then
@@ -572,26 +308,54 @@ install_l2tp() {
         read -r VPN_PASS
         echo "请输入预共享密钥(PSK):"
         read -r VPN_PSK
+        SOCKS_USER="$VPN_USER"
+        SOCKS_PASS="$VPN_PASS"
     else
         VPN_USER="@NameQC"
         VPN_PASS="@NameQC"
         VPN_PSK="@NameQC"
+        SOCKS_USER="NameQC"
+        SOCKS_PASS="NameQC"
         echo "使用默认值: 用户名=$VPN_USER, 密码=$VPN_PASS, PSK=$VPN_PSK"
+    fi
+
+    ########################
+    # 基础检查
+    ########################
+    if [ "$(id -u)" -ne 0 ]; then
+      echo "请用 root 用户执行本脚本。"
+      exit 1
+    fi
+
+    if [ -f /etc/os-release ]; then
+      . /etc/os-release
+      if [ "$ID" != "ubuntu" ] || [[ "$VERSION_ID" != 24.* ]]; then
+        echo "本脚本只针对 Ubuntu 24.x，当前系统：$PRETTY_NAME"
+        exit 1
+      fi
+    else
+      echo "无法检测系统版本，终止。"
+      exit 1
     fi
 
     # 检测外网网卡
     WAN_IF=$(ip route get 1.1.1.1 2>/dev/null | awk '/dev/ {print $5; exit}')
     if [ -z "$WAN_IF" ]; then
-        echo "无法自动检测外网网卡，请手动修改脚本中的 WAN_IF 变量后再运行。"
-        return 1
+      echo "无法自动检测外网网卡，请手动修改脚本中的 WAN_IF 变量后再运行。"
+      exit 1
     fi
     echo "检测到外网网卡：$WAN_IF"
 
+    ########################
+    # 安装依赖
+    ########################
     export DEBIAN_FRONTEND=noninteractive
     apt update -y
-    apt install -y strongswan xl2tpd ppp iptables iptables-persistent
+    apt install -y strongswan xl2tpd ppp iptables iptables-persistent dante-server
 
+    ########################
     # IP 转发 & 内核参数
+    ########################
     cat > /etc/sysctl.d/99-l2tp-ipsec.conf <<EOF2
 net.ipv4.ip_forward=1
 net.ipv4.conf.all.send_redirects=0
@@ -603,7 +367,9 @@ net.ipv4.conf.default.rp_filter=0
 EOF2
     sysctl --system
 
+    ########################
     # strongSwan 配置
+    ########################
     cat > /etc/ipsec.conf <<EOF2
 config setup
   uniqueids=no
@@ -628,7 +394,9 @@ EOF2
 : PSK "$VPN_PSK"
 EOF2
 
+    ########################
     # xl2tpd 配置
+    ########################
     cat > /etc/xl2tpd/xl2tpd.conf <<EOF2
 [global]
 port = 1701
@@ -644,14 +412,23 @@ pppoptfile = /etc/ppp/options.xl2tpd
 length bit = yes
 EOF2
 
+    ########################
+    # PPP / L2TP 配置（适配 Ubuntu24 + iOS）
+    ########################
     cat > /etc/ppp/options.xl2tpd <<EOF2
 name l2tpd
 auth
+
 refuse-pap
 refuse-chap
 require-mschap-v2
+
+# MPPE 加密不强制，完全由 IPsec 负责隧道加密
+# require-mppe-128
+
 mtu 1400
 mru 1400
+
 ms-dns 8.8.8.8
 ms-dns 1.1.1.1
 EOF2
@@ -662,81 +439,41 @@ EOF2
     chmod 600 /etc/ppp/chap-secrets
     chmod 600 /etc/ppp/options.xl2tpd
 
+    ########################
     # iptables NAT & 端口放行
-    iptables -A INPUT -i lo -j ACCEPT 2>/dev/null
-    iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null
-    iptables -A INPUT -p udp --dport 500 -j ACCEPT 2>/dev/null
-    iptables -A INPUT -p udp --dport 4500 -j ACCEPT 2>/dev/null
-    iptables -A INPUT -p udp --dport 1701 -j ACCEPT 2>/dev/null
-    iptables -A FORWARD -s $VPN_NET -j ACCEPT 2>/dev/null
-    iptables -A FORWARD -d $VPN_NET -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null
-    iptables -t nat -A POSTROUTING -s $VPN_NET -o $WAN_IF -j MASQUERADE 2>/dev/null
+    ########################
+    # 清空旧规则（假设新机器上没自定义防火墙）
+    iptables -F
+    iptables -t nat -F
 
-    netfilter-persistent save 2>/dev/null
+    # 基础允许：回环、本机已建立连接
+    iptables -A INPUT -i lo -j ACCEPT
+    iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
-    systemctl enable strongswan-starter
-    systemctl enable xl2tpd
-    systemctl restart strongswan-starter
-    systemctl restart xl2tpd
+    # IPsec / L2TP 端口
+    iptables -A INPUT -p udp --dport 500  -j ACCEPT
+    iptables -A INPUT -p udp --dport 4500 -j ACCEPT
+    iptables -A INPUT -p udp --dport 1701 -j ACCEPT
 
-    INSTALLED_L2TP=1
-    echo "✅ L2TP/IPSec VPN 安装完成！"
-    echo "  服务器IP: $(curl -s ifconfig.me 2>/dev/null || curl -s icanhazip.com 2>/dev/null || echo '未知')"
-    echo "  用户名: $VPN_USER"
-    echo "  密码: $VPN_PASS"
-    echo "  PSK: $VPN_PSK"
-    echo ""
-    read -p "按回车键继续..."
-}
+    # SOCKS5 端口
+    iptables -A INPUT -p tcp --dport $SOCKS_PORT -j ACCEPT
 
-########################
-# 函数：安装 SOCKS5
-########################
-install_socks5() {
-    echo "===================================================="
-    echo "           正在安装：SOCKS5 代理"
-    echo "===================================================="
-    
-    if [ $INSTALLED_SOCKS5 -eq 1 ]; then
-        echo "检测到SOCKS5已安装"
-        read -p "是否重新安装？(y/n): " REINSTALL
-        if [[ "$REINSTALL" != "y" && "$REINSTALL" != "Y" ]]; then
-            return 0
-        fi
-    fi
-    
-    echo "是否自定义SOCKS5账号密码和端口？(y/n)"
-    read -r CUSTOM_CHOICE
+    # VPN 网段 NAT
+    iptables -A FORWARD -s $VPN_NET -j ACCEPT
+    iptables -A FORWARD -d $VPN_NET -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+    iptables -t nat -A POSTROUTING -s $VPN_NET -o $WAN_IF -j MASQUERADE
 
-    if [[ "$CUSTOM_CHOICE" == "y" || "$CUSTOM_CHOICE" == "Y" ]]; then
-        echo "请输入SOCKS5用户名:"
-        read -r SOCKS_USER
-        echo "请输入SOCKS5密码:"
-        read -r SOCKS_PASS
-        echo "请输入SOCKS5端口 (默认1080):"
-        read -r SOCKS_PORT
-        if [ -z "$SOCKS_PORT" ]; then
-            SOCKS_PORT=1080
-        fi
-    else
-        SOCKS_USER="NameQC"
-        SOCKS_PASS="NameQC"
-        SOCKS_PORT=1080
-        echo "使用默认值: 用户名=$SOCKS_USER, 密码=$SOCKS_PASS, 端口=$SOCKS_PORT"
-    fi
+    # 保持其余 INPUT 默认策略为 ACCEPT，避免误杀其他服务
+    netfilter-persistent save
 
-    WAN_IF=$(ip route get 1.1.1.1 2>/dev/null | awk '/dev/ {print $5; exit}')
-    if [ -z "$WAN_IF" ]; then
-        echo "无法自动检测外网网卡"
-        return 1
-    fi
-
-    export DEBIAN_FRONTEND=noninteractive
-    apt update -y
-    apt install -y dante-server
-
+    ########################
+    # Dante SOCKS5 配置
+    ########################
+    # 非特权运行用户
     id socks >/dev/null 2>&1 || useradd -r -s /usr/sbin/nologin socks
-    id "$SOCKS_USER" >/dev/null 2>&1 || useradd -M -s /usr/sbin/nologin "$SOCKS_USER"
+
+    # SOCKS 登录用户
+    id "$SOCKS_USER" >/dev/null 2>&1 || useradd -M -s /usr/sbin/nologin "$SOCKS_USER" || true
     echo "$SOCKS_USER:$SOCKS_PASS" | chpasswd
 
     cat > /etc/danted.conf <<EOF2
@@ -760,206 +497,79 @@ pass {
 }
 EOF2
 
-    iptables -A INPUT -p tcp --dport $SOCKS_PORT -j ACCEPT 2>/dev/null
-    netfilter-persistent save 2>/dev/null
-
     systemctl enable danted
     systemctl restart danted
 
-    INSTALLED_SOCKS5=1
-    echo "✅ SOCKS5 代理安装完成！"
-    echo "  服务器IP: $(curl -s ifconfig.me 2>/dev/null || curl -s icanhazip.com 2>/dev/null || echo '未知')"
-    echo "  端口: $SOCKS_PORT"
-    echo "  用户名: $SOCKS_USER"
-    echo "  密码: $SOCKS_PASS"
-    echo ""
-    read -p "按回车键继续..."
-}
+    ########################
+    # 启动 strongSwan & xl2tpd
+    ########################
+    systemctl enable strongswan-starter
+    systemctl enable xl2tpd
+    systemctl restart strongswan-starter
+    systemctl restart xl2tpd
 
-########################
-# 函数：安装 VLESS
-########################
-install_vless() {
-    echo "===================================================="
-    echo "           正在安装：VLESS 代理"
-    echo "===================================================="
-    
-    if [ $INSTALLED_VLESS -eq 1 ]; then
-        echo "检测到VLESS已安装"
-        read -p "是否重新安装？(y/n): " REINSTALL
-        if [[ "$REINSTALL" != "y" && "$REINSTALL" != "Y" ]]; then
-            return 0
-        fi
-    fi
-    
-    echo "请选择使用 Xray 还是 v2ray："
-    echo "  1) Xray (推荐)"
-    echo "  2) v2ray"
-    read -r VLESS_CHOICE
+    # 获取本机公网IP
+    SERVER_IP=$(curl -s ifconfig.me || curl -s icanhazip.com || curl -s ipinfo.io/ip || echo "无法自动获取，请手动查询")
 
-    echo "是否自定义VLESS配置？(y/n)"
-    read -r CUSTOM_CHOICE
-
-    if [[ "$CUSTOM_CHOICE" == "y" || "$CUSTOM_CHOICE" == "Y" ]]; then
-        echo "请输入VLESS端口 (默认443):"
-        read -r VLESS_PORT
-        if [ -z "$VLESS_PORT" ]; then
-            VLESS_PORT=443
-        fi
-        echo "请输入UUID (直接回车自动生成):"
-        read -r VLESS_UUID
-        if [ -z "$VLESS_UUID" ]; then
-            VLESS_UUID=$(cat /proc/sys/kernel/random/uuid)
-        fi
-        echo "请输入Path (默认/):"
-        read -r VLESS_PATH
-        if [ -z "$VLESS_PATH" ]; then
-            VLESS_PATH="/"
-        fi
-    else
-        VLESS_PORT=443
-        VLESS_UUID=$(cat /proc/sys/kernel/random/uuid)
-        VLESS_PATH="/"
-        echo "使用默认配置: 端口=$VLESS_PORT, UUID=$VLESS_UUID, Path=$VLESS_PATH"
-    fi
-
-    export DEBIAN_FRONTEND=noninteractive
-    apt update -y
-    apt install -y curl wget unzip
-
-    # 安装 Xray 或 v2ray
-    if [ "$VLESS_CHOICE" == "1" ] || [ -z "$VLESS_CHOICE" ]; then
-        echo "安装 Xray..."
-        bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
-        VLESS_BIN="xray"
-        VLESS_SERVICE="xray"
-    else
-        echo "安装 v2ray..."
-        bash <(curl -L https://raw.githubusercontent.com/v2fly/fhs-install-v2ray/master/install-release.sh)
-        VLESS_BIN="v2ray"
-        VLESS_SERVICE="v2ray"
-    fi
-
-    # 生成VLESS配置
-    mkdir -p /usr/local/etc/$VLESS_BIN
-    cat > /usr/local/etc/$VLESS_BIN/config.json <<EOF2
-{
-  "inbounds": [
-    {
-      "port": $VLESS_PORT,
-      "protocol": "vless",
-      "settings": {
-        "clients": [
-          {
-            "id": "$VLESS_UUID",
-            "flow": ""
-          }
-        ],
-        "decryption": "none"
-      },
-      "streamSettings": {
-        "network": "ws",
-        "wsSettings": {
-          "path": "$VLESS_PATH"
-        }
-      }
-    }
-  ],
-  "outbounds": [
-    {
-      "protocol": "freedom"
-    }
-  ]
-}
-EOF2
-
-    # 放行端口
-    iptables -A INPUT -p tcp --dport $VLESS_PORT -j ACCEPT 2>/dev/null
-    netfilter-persistent save 2>/dev/null
-
-    systemctl enable $VLESS_SERVICE
-    systemctl restart $VLESS_SERVICE
-
-    INSTALLED_VLESS=1
-    echo "✅ VLESS 代理安装完成！"
-    echo "  服务器IP: $(curl -s ifconfig.me 2>/dev/null || curl -s icanhazip.com 2>/dev/null || echo '未知')"
-    echo "  端口: $VLESS_PORT"
-    echo "  UUID: $VLESS_UUID"
-    echo "  Path: $VLESS_PATH"
-    echo ""
-    echo "【VLESS链接】"
-    echo "vless://$VLESS_UUID@$(curl -s ifconfig.me 2>/dev/null || curl -s icanhazip.com 2>/dev/null):$VLESS_PORT?encryption=none&security=none&type=ws&path=$VLESS_PATH#VLESS"
-    echo ""
-    read -p "按回车键继续..."
-}
-
-########################
-# 函数：安装菜单
-########################
-show_install_menu() {
-    clear
     echo "===================================================="
     echo "#           Telegram联系：@NameQC                   #"
     echo "#    全球服务器 免实名服务器 高防服务器 站群服务器  #"
     echo "#         Telegram双向机器人：@NameQCBot            #"
     echo "===================================================="
-    echo "              选择要安装的服务"
+    echo " 安装完成：L2TP/IPsec + SOCKS5（Ubuntu 24 终极版）"
     echo "===================================================="
-    echo ""
-    echo "  1) 安装 L2TP/IPSec VPN"
-    echo "  2) 安装 SOCKS5 代理"
-    echo "  3) 安装 VLESS 代理"
-    echo "  4) 安装 L2TP + SOCKS5 (组合)"
-    echo "  0) 退出"
-    echo ""
-    read -p "请输入选项 (0-4): " INSTALL_CHOICE
-
-    case $INSTALL_CHOICE in
-        1)
-            install_l2tp
-            ;;
-        2)
-            install_socks5
-            ;;
-        3)
-            install_vless
-            ;;
-        4)
-            echo "安装 L2TP + SOCKS5 组合..."
-            install_l2tp
-            install_socks5
-            ;;
-        0)
-            exit 0
-            ;;
-        *)
-            echo "无效选项！"
-            read -p "按回车键继续..."
-            show_install_menu
-            ;;
-    esac
+    echo "检查命令："
+    echo "  ipsec status"
+    echo "  journalctl -u strongswan-starter -n 30"
+    echo "  journalctl -u xl2tpd -n 30"
+    echo "  journalctl -u danted -n 30"
+    echo "  ss -lunp  | grep -E '500|4500|1701'"
+    echo "  ss -tnlp  | grep $SOCKS_PORT"
+    echo "---------------------------------------------------"
+    echo "【L2TP/IPsec】"
+    echo "  服务器：$SERVER_IP"
+    echo "  账户：  $VPN_USER"
+    echo "  密码：  $VPN_PASS"
+    echo "  PSK：   $VPN_PSK"
+    echo
+    echo "iPhone / iPad / macOS 设置："
+    echo "  类型：      L2TP"
+    echo "  服务器：    $SERVER_IP"
+    echo "  账户：      $VPN_USER"
+    echo "  密码：      $VPN_PASS"
+    echo "  密钥(PSK)： $VPN_PSK"
+    echo "  发送所有流量：开启"
+    echo
+    echo "【SOCKS5】"
+    echo "  地址： $SERVER_IP"
+    echo "  端口： $SOCKS_PORT"
+    echo "  用户： $SOCKS_USER"
+    echo "  密码： $SOCKS_PASS"
+    echo
+    echo "【管理命令】"
+    echo "  输入 'vpn' 即可调出综合管理菜单"
+    echo "===================================================="
 }
 
 ########################
 # 主入口：根据参数和安装状态决定行为
 ########################
 if [[ "$1" == "install" ]]; then
-    show_install_menu
-    cp -f "$0" /usr/local/bin/qc
-    chmod +x /usr/local/bin/qc
-    echo "✅ 管理命令已安装：输入 'qc' 即可管理"
+    install_vpn
+    cp -f "$0" /usr/local/bin/vpn
+    chmod +x /usr/local/bin/vpn
+    echo "✅ 管理命令已安装：输入 'vpn' 即可管理"
 elif [[ "$1" == "--help" || "$1" == "-h" ]]; then
     echo "用法:"
-    echo "  qc install    - 安装服务"
-    echo "  qc            - 显示管理菜单"
+    echo "  vpn install    - 安装服务"
+    echo "  vpn            - 显示管理菜单"
 else
-    check_installed_services
-    if [ $INSTALLED_L2TP -eq 1 ] || [ $INSTALLED_SOCKS5 -eq 1 ] || [ $INSTALLED_VLESS -eq 1 ]; then
+    if [ -f /etc/ppp/chap-secrets ]; then
         show_main_menu
     else
-        show_install_menu
-        cp -f "$0" /usr/local/bin/qc
-        chmod +x /usr/local/bin/qc
-        echo "✅ 管理命令已安装：输入 'qc' 即可管理"
+        install_vpn
+        cp -f "$0" /usr/local/bin/vpn
+        chmod +x /usr/local/bin/vpn
+        echo "✅ 管理命令已安装：输入 'vpn' 即可管理"
     fi
 fi
