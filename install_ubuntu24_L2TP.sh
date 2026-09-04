@@ -54,9 +54,12 @@ show_l2tp_menu() {
                 return 1
             fi
             read -p "请输入新密码: " NEW_PASS
-            sed -i "/^$MOD_USER /s/ [^ ]* / $NEW_PASS /" /etc/ppp/chap-secrets
+            # 使用更精确的 sed 替换
+            sed -i "/^$MOD_USER[[:space:]]/s/ [^ ]* / $NEW_PASS /" /etc/ppp/chap-secrets
             echo "✅ 用户 $MOD_USER 的密码已更新！"
             systemctl restart xl2tpd
+            systemctl restart strongswan-starter
+            echo "✅ VPN服务已重启，新密码立即生效"
             ;;
         2)
             read -p "请输入新用户名: " NEW_USER
@@ -76,7 +79,7 @@ show_l2tp_menu() {
                 echo "错误：用户 $DEL_USER 不存在！"
                 return 1
             fi
-            sed -i "/^$DEL_USER /d" /etc/ppp/chap-secrets
+            sed -i "/^$DEL_USER[[:space:]]/d" /etc/ppp/chap-secrets
             echo "✅ 用户 $DEL_USER 已删除！"
             systemctl restart xl2tpd
             ;;
@@ -87,6 +90,7 @@ show_l2tp_menu() {
 EOF
             echo "✅ 预共享密钥已更新！"
             systemctl restart strongswan-starter
+            systemctl restart xl2tpd
             ;;
         5)
             echo ""
@@ -126,7 +130,6 @@ show_socks5_menu() {
     echo "===================================================="
     echo "当前SOCKS5用户列表："
     if [ -f /etc/danted.conf ]; then
-        # 从凭证文件读取用户名和密码
         if [ -f /root/.socks5_credentials ]; then
             local SOCKS_USER=$(grep "^SOCKS5_USER=" /root/.socks5_credentials | cut -d'=' -f2)
             local SOCKS_PASS=$(grep "^SOCKS5_PASS=" /root/.socks5_credentials | cut -d'=' -f2)
@@ -157,7 +160,6 @@ show_socks5_menu() {
 
     case $ACTION in
         1)
-            # 从凭证文件读取用户名
             local CURRENT_USER=$(grep "^SOCKS5_USER=" /root/.socks5_credentials | cut -d'=' -f2)
             if [ -z "$CURRENT_USER" ]; then
                 echo "错误：无法获取当前SOCKS5用户名！"
@@ -165,15 +167,23 @@ show_socks5_menu() {
             fi
             echo "当前SOCKS5用户: $CURRENT_USER"
             read -p "请输入新密码: " NEW_PASS
-            echo "$CURRENT_USER:$NEW_PASS" | chpasswd
-            echo "✅ 用户 $CURRENT_USER 的密码已更新！"
-            systemctl restart danted
             
-            # 更新凭证文件中的密码
-            if [ -f /root/.socks5_credentials ]; then
-                sed -i "s/^SOCKS5_PASS=.*/SOCKS5_PASS=$NEW_PASS/" /root/.socks5_credentials
-                echo "✅ 凭证文件已同步更新"
-            fi
+            # 修改系统用户密码
+            echo "$CURRENT_USER:$NEW_PASS" | chpasswd
+            
+            # 更新凭证文件
+            sed -i "s/^SOCKS5_PASS=.*/SOCKS5_PASS=$NEW_PASS/" /root/.socks5_credentials
+            
+            # 强制重启 Dante 服务，清空所有连接和缓存
+            systemctl stop danted
+            sleep 2
+            # 杀掉所有残留的 danted 进程
+            pkill -f danted 2>/dev/null || true
+            sleep 1
+            systemctl start danted
+            
+            echo "✅ 用户 $CURRENT_USER 的密码已更新！"
+            echo "✅ 所有旧的 SOCKS5 连接已被强制断开，新密码立即生效"
             ;;
         2)
             local CURRENT_PORT=$(grep -E "^internal: 0.0.0.0 port =" /etc/danted.conf | awk '{print $5}')
@@ -190,7 +200,6 @@ show_socks5_menu() {
             echo "✅ SOCKS5端口已更新为 $NEW_PORT，服务将重启..."
             systemctl restart danted
             
-            # 更新凭证文件中的端口
             if [ -f /root/.socks5_credentials ]; then
                 sed -i "s/^SOCKS5_PORT=.*/SOCKS5_PORT=$NEW_PORT/" /root/.socks5_credentials
             fi
@@ -198,7 +207,7 @@ show_socks5_menu() {
         3)
             echo ""
             echo "【SOCKS5 服务状态】"
-            systemctl status danted --no-pager 2>/dev/null | grep "Active:"
+            systemctl status danted --no-pager 2>/dev/null | grep "Active:" || echo "  未运行"
             echo ""
             echo "【端口监听】"
             ss -tnlp 2>/dev/null | grep danted || echo "  未监听"
@@ -288,6 +297,7 @@ show_main_menu() {
                     echo "正在卸载..."
                     systemctl stop strongswan-starter xl2tpd danted 2>/dev/null
                     systemctl disable strongswan-starter xl2tpd danted 2>/dev/null
+                    pkill -f danted 2>/dev/null || true
                     apt remove -y strongswan xl2tpd dante-server 2>/dev/null
                     rm -rf /etc/ipsec.conf /etc/ipsec.secrets /etc/xl2tpd /etc/ppp/chap-secrets /etc/danted.conf
                     rm -f /usr/local/bin/vpn
@@ -314,14 +324,12 @@ show_main_menu() {
 # 主安装流程
 ########################
 install_vpn() {
-    # 检查是否已安装
     if [ -f /etc/ppp/chap-secrets ]; then
         echo "检测到VPN已安装，输入 'vpn' 命令进行管理。"
         echo "如需重新安装，请先运行 'vpn' 选择 '4) 卸载所有服务'"
         exit 0
     fi
 
-    # 交互式询问是否自定义账号密码
     echo "===================================================="
     echo "           正在安装：L2TP/IPsec + SOCKS5            "
     echo "===================================================="
@@ -348,9 +356,6 @@ install_vpn() {
         echo "使用默认值: 用户名=$VPN_USER, 密码=$VPN_PASS, PSK=$VPN_PSK"
     fi
 
-    ########################
-    # 基础检查
-    ########################
     if [ "$(id -u)" -ne 0 ]; then
       echo "请用 root 用户执行本脚本。"
       exit 1
@@ -367,7 +372,6 @@ install_vpn() {
       exit 1
     fi
 
-    # 检测外网网卡
     WAN_IF=$(ip route get 1.1.1.1 2>/dev/null | awk '/dev/ {print $5; exit}')
     if [ -z "$WAN_IF" ]; then
       echo "无法自动检测外网网卡，请手动修改脚本中的 WAN_IF 变量后再运行。"
@@ -375,16 +379,10 @@ install_vpn() {
     fi
     echo "检测到外网网卡：$WAN_IF"
 
-    ########################
-    # 安装依赖
-    ########################
     export DEBIAN_FRONTEND=noninteractive
     apt update -y
     apt install -y strongswan xl2tpd ppp iptables iptables-persistent dante-server
 
-    ########################
-    # IP 转发 & 内核参数
-    ########################
     cat > /etc/sysctl.d/99-l2tp-ipsec.conf <<EOF2
 net.ipv4.ip_forward=1
 net.ipv4.conf.all.send_redirects=0
@@ -396,9 +394,6 @@ net.ipv4.conf.default.rp_filter=0
 EOF2
     sysctl --system
 
-    ########################
-    # strongSwan 配置
-    ########################
     cat > /etc/ipsec.conf <<EOF2
 config setup
   uniqueids=no
@@ -423,9 +418,6 @@ EOF2
 : PSK "$VPN_PSK"
 EOF2
 
-    ########################
-    # xl2tpd 配置
-    ########################
     cat > /etc/xl2tpd/xl2tpd.conf <<EOF2
 [global]
 port = 1701
@@ -441,9 +433,6 @@ pppoptfile = /etc/ppp/options.xl2tpd
 length bit = yes
 EOF2
 
-    ########################
-    # PPP / L2TP 配置（适配 Ubuntu24 + iOS）
-    ########################
     cat > /etc/ppp/options.xl2tpd <<EOF2
 name l2tpd
 auth
@@ -465,9 +454,6 @@ EOF2
     chmod 600 /etc/ppp/chap-secrets
     chmod 600 /etc/ppp/options.xl2tpd
 
-    ########################
-    # iptables NAT & 端口放行
-    ########################
     iptables -F
     iptables -t nat -F
 
@@ -486,9 +472,6 @@ EOF2
 
     netfilter-persistent save
 
-    ########################
-    # Dante SOCKS5 配置
-    ########################
     id socks >/dev/null 2>&1 || useradd -r -s /usr/sbin/nologin socks
 
     id "$SOCKS_USER" >/dev/null 2>&1 || useradd -M -s /usr/sbin/nologin "$SOCKS_USER"
@@ -521,18 +504,13 @@ EOF2
     systemctl enable danted
     systemctl restart danted
 
-    ########################
-    # 启动 strongSwan & xl2tpd
-    ########################
     systemctl enable strongswan-starter
     systemctl enable xl2tpd
     systemctl restart strongswan-starter
     systemctl restart xl2tpd
 
-    # 获取本机公网IP
     SERVER_IP=$(curl -s ifconfig.me 2>/dev/null || curl -s icanhazip.com 2>/dev/null || curl -s ipinfo.io/ip 2>/dev/null || echo "无法自动获取，请手动查询")
 
-    # 保存 SOCKS5 凭证到文件（仅 root 可读）
     cat > /root/.socks5_credentials <<EOF
 SOCKS5_USER=$SOCKS_USER
 SOCKS5_PASS=$SOCKS_PASS
@@ -581,7 +559,7 @@ EOF
 }
 
 ########################
-# 主入口：根据参数和安装状态决定行为
+# 主入口
 ########################
 if [[ "$1" == "install" ]]; then
     install_vpn
