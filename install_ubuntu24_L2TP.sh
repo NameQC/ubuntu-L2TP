@@ -49,13 +49,17 @@ show_l2tp_menu() {
     case $ACTION in
         1)
             read -p "请输入要修改密码的用户名: " MOD_USER
-            if ! grep -q "^$MOD_USER " /etc/ppp/chap-secrets; then
+            if ! grep -q "^\"$MOD_USER\" " /etc/ppp/chap-secrets && ! grep -q "^$MOD_USER " /etc/ppp/chap-secrets; then
                 echo "错误：用户 $MOD_USER 不存在！"
                 return 1
             fi
             read -p "请输入新密码: " NEW_PASS
-            # 使用更精确的 sed 替换
-            sed -i "/^$MOD_USER[[:space:]]/s/ [^ ]* / $NEW_PASS /" /etc/ppp/chap-secrets
+            # 删除旧条目（支持带引号和不带引号两种格式）
+            sed -i "/^\"$MOD_USER\" /d" /etc/ppp/chap-secrets
+            sed -i "/^$MOD_USER /d" /etc/ppp/chap-secrets
+            # 添加带引号的新条目
+            echo "\"$MOD_USER\" l2tpd \"$NEW_PASS\" *" >> /etc/ppp/chap-secrets
+            chmod 600 /etc/ppp/chap-secrets
             echo "✅ 用户 $MOD_USER 的密码已更新！"
             systemctl restart xl2tpd
             systemctl restart strongswan-starter
@@ -63,23 +67,26 @@ show_l2tp_menu() {
             ;;
         2)
             read -p "请输入新用户名: " NEW_USER
-            if grep -q "^$NEW_USER " /etc/ppp/chap-secrets; then
+            if grep -q "^\"$NEW_USER\" " /etc/ppp/chap-secrets || grep -q "^$NEW_USER " /etc/ppp/chap-secrets; then
                 echo "错误：用户 $NEW_USER 已存在！"
                 return 1
             fi
             read -p "请输入密码: " NEW_PASS
-            echo "$NEW_USER l2tpd $NEW_PASS *" >> /etc/ppp/chap-secrets
+            # 使用带引号的格式
+            echo "\"$NEW_USER\" l2tpd \"$NEW_PASS\" *" >> /etc/ppp/chap-secrets
             chmod 600 /etc/ppp/chap-secrets
             echo "✅ 用户 $NEW_USER 已添加！"
             systemctl restart xl2tpd
             ;;
         3)
             read -p "请输入要删除的用户名: " DEL_USER
-            if ! grep -q "^$DEL_USER " /etc/ppp/chap-secrets; then
+            if ! grep -q "^\"$DEL_USER\" " /etc/ppp/chap-secrets && ! grep -q "^$DEL_USER " /etc/ppp/chap-secrets; then
                 echo "错误：用户 $DEL_USER 不存在！"
                 return 1
             fi
-            sed -i "/^$DEL_USER[[:space:]]/d" /etc/ppp/chap-secrets
+            # 删除带引号和不带引号两种格式
+            sed -i "/^\"$DEL_USER\" /d" /etc/ppp/chap-secrets
+            sed -i "/^$DEL_USER /d" /etc/ppp/chap-secrets
             echo "✅ 用户 $DEL_USER 已删除！"
             systemctl restart xl2tpd
             ;;
@@ -167,21 +174,16 @@ show_socks5_menu() {
             fi
             echo "当前SOCKS5用户: $CURRENT_USER"
             read -p "请输入新密码: " NEW_PASS
-            
-            # 修改系统用户密码
+
             echo "$CURRENT_USER:$NEW_PASS" | chpasswd
-            
-            # 更新凭证文件
             sed -i "s/^SOCKS5_PASS=.*/SOCKS5_PASS=$NEW_PASS/" /root/.socks5_credentials
-            
-            # 强制重启 Dante 服务，清空所有连接和缓存
+
             systemctl stop danted
             sleep 2
-            # 杀掉所有残留的 danted 进程
             pkill -f danted 2>/dev/null || true
             sleep 1
             systemctl start danted
-            
+
             echo "✅ 用户 $CURRENT_USER 的密码已更新！"
             echo "✅ 所有旧的 SOCKS5 连接已被强制断开，新密码立即生效"
             ;;
@@ -193,13 +195,12 @@ show_socks5_menu() {
                 return 1
             fi
             sed -i "s/internal: 0.0.0.0 port = $CURRENT_PORT/internal: 0.0.0.0 port = $NEW_PORT/" /etc/danted.conf
-            # 更新防火墙规则
             iptables -D INPUT -p tcp --dport $CURRENT_PORT -j ACCEPT 2>/dev/null
             iptables -A INPUT -p tcp --dport $NEW_PORT -j ACCEPT 2>/dev/null
             netfilter-persistent save 2>/dev/null
             echo "✅ SOCKS5端口已更新为 $NEW_PORT，服务将重启..."
             systemctl restart danted
-            
+
             if [ -f /root/.socks5_credentials ]; then
                 sed -i "s/^SOCKS5_PORT=.*/SOCKS5_PORT=$NEW_PORT/" /root/.socks5_credentials
             fi
@@ -448,8 +449,9 @@ ms-dns 8.8.8.8
 ms-dns 1.1.1.1
 EOF2
 
+    # 【关键修复】使用带引号的格式，防止多用户认证冲突
     cat > /etc/ppp/chap-secrets <<EOF2
-$VPN_USER l2tpd $VPN_PASS *
+"$VPN_USER" l2tpd "$VPN_PASS" *
 EOF2
     chmod 600 /etc/ppp/chap-secrets
     chmod 600 /etc/ppp/options.xl2tpd
