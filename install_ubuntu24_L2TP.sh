@@ -1,4 +1,3 @@
-cat > /tmp/install_correct.sh << 'EOF'
 #!/usr/bin/env bash
 set -e
 
@@ -693,7 +692,3 @@ while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
 done
 
 main_menu
-EOF
-
-chmod +x /tmp/install_correct.sh
-bash /tmp/install_correct.sh
