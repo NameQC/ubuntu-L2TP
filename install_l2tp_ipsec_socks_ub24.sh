@@ -38,9 +38,9 @@ if [[ "$CUSTOM_CHOICE" == "y" || "$CUSTOM_CHOICE" == "Y" ]]; then
     echo "请输入预共享密钥(PSK):"
     read -r VPN_PSK
 else
-    VPN_USER="@NameQC"
-    VPN_PASS="@NameQC"
-    VPN_PSK="@NameQC"
+    VPN_USER="vpnL2TP"
+    VPN_PASS="vpnL2TP"
+    VPN_PSK="vpnL2TP"
     echo "使用默认值: 用户名=$VPN_USER, 密码=$VPN_PASS, PSK=$VPN_PSK"
 fi
 
