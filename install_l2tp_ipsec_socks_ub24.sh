@@ -2,7 +2,7 @@
 set -e
 
 ########################
-# 可自定义参数
+# 可自定义参数（若安装时选择默认）
 ########################
 VPN_USER="vpnL2TP"
 VPN_PASS="vpnL2TP"
@@ -15,9 +15,34 @@ VPN_POOL_START="10.10.10.10"
 VPN_POOL_END="10.10.10.200"
 
 # SOCKS5 配置
-SOCKS_USER="vpnqiaozhi"
-SOCKS_PASS="vpnqiaozhi"
+SOCKS_USER="NameQC"
+SOCKS_PASS="NameQC"
 SOCKS_PORT=1080
+
+########################
+# 交互式询问是否自定义账号密码
+########################
+echo "===================================================="
+echo "           正在安装：L2TP/IPsec + SOCKS5            "
+echo "===================================================="
+echo "是否自定义VPN账号密码和预共享密钥？(y/n)"
+echo "输入 y 则自定义，输入 n 或直接回车则使用默认值"
+echo "===================================================="
+read -r CUSTOM_CHOICE
+
+if [[ "$CUSTOM_CHOICE" == "y" || "$CUSTOM_CHOICE" == "Y" ]]; then
+    echo "请输入VPN用户名:"
+    read -r VPN_USER
+    echo "请输入VPN密码:"
+    read -r VPN_PASS
+    echo "请输入预共享密钥(PSK):"
+    read -r VPN_PSK
+else
+    VPN_USER="@NameQC"
+    VPN_PASS="@NameQC"
+    VPN_PSK="@NameQC"
+    echo "使用默认值: 用户名=$VPN_USER, 密码=$VPN_PASS, PSK=$VPN_PSK"
+fi
 
 ########################
 # 基础检查
@@ -208,25 +233,34 @@ systemctl enable xl2tpd
 systemctl restart strongswan-starter
 systemctl restart xl2tpd
 
+# 获取本机公网IP
+SERVER_IP=$(curl -s ifconfig.me || curl -s icanhazip.com || curl -s ipinfo.io/ip || echo "无法自动获取，请手动查询")
+
 echo "===================================================="
-echo " 安装完成：L2TP/IPsec + SOCKS5（Ubuntu 24 终极版）"
+echo "#           Telegram联系：@NameQC                   #"
+echo "#    全球服务器 免实名服务器 高防服务器 站群服务器     #"
+echo "#         Telegram双向机器人：@NameQCBot            #"
+echo "===================================================="
+echo "===================================================="
+echo " 安装完成：L2TP/IPsec + SOCKS5（Ubuntu 24 终极版）   "
+echo "===================================================="
 echo
 echo "【L2TP/IPsec】"
-echo "  服务器：你的公网 IP"
+echo "  服务器：$SERVER_IP"
 echo "  账户：  $VPN_USER"
 echo "  密码：  $VPN_PASS"
 echo "  PSK：   $VPN_PSK"
 echo
 echo "iPhone / iPad / macOS 设置："
 echo "  类型：      L2TP"
-echo "  服务器：    公网IP"
+echo "  服务器：    $SERVER_IP"
 echo "  账户：      $VPN_USER"
 echo "  密码：      $VPN_PASS"
 echo "  密钥(PSK)： $VPN_PSK"
 echo "  发送所有流量：开启"
 echo
 echo "【SOCKS5】"
-echo "  地址： 公网IP"
+echo "  地址： $SERVER_IP"
 echo "  端口： $SOCKS_PORT"
 echo "  用户： $SOCKS_USER"
 echo "  密码： $SOCKS_PASS"
